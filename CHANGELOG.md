@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-26
+
 ### Added
 
 - First version: a Vanderbilt SPC panel through the SPC Web Gateway of
@@ -43,4 +45,5 @@ the notes of the version's GitHub Release.
 - "Test the connection" and "Use the panel that answers" buttons;
   documentation in English and French.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-vanderbilt-spc/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-vanderbilt-spc/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-vanderbilt-spc/releases/tag/v0.1.1
