@@ -1,177 +1,126 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Vanderbilt SPC",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Vanderbilt SPC alarm panel through the SPC Web Gateway: areas, set, zones, live events.",
+    "fr": "Centrale d'alarme Vanderbilt SPC par la SPC Web Gateway : secteurs, mise en service, zones."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-vanderbilt-spc:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-vanderbilt-spc/main/cover.png",
+  "categories": ["security"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": { "en": "How it works", "fr": "Fonctionnement" },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
-      },
-      "links": [
-        {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
-        }
-      ]
+        "en": "Gladys talks to the SPC Web Gateway (Lundix software, installed separately) on your network, without any cloud: it reads the areas and zones of your Vanderbilt SPC panel every minute and receives its events live. Each area becomes a device (mode, armed, alarm, and buttons: full set, part set A, part set B, unset), each zone another (state, trouble, inhibited or isolated, alarm). Unofficial integration, not affiliated with Vanderbilt nor Lundix. Never tested with a real panel: see the documentation.",
+        "fr": "Gladys dialogue avec la SPC Web Gateway (logiciel Lundix, installé à part) sur votre réseau, sans cloud : elle lit les secteurs et les zones de votre centrale Vanderbilt SPC toutes les minutes et reçoit ses événements en direct. Chaque secteur devient un appareil (mode, armé, alarme, et boutons : mise en service totale, partielle A, partielle B, mise hors service), chaque zone un autre (état, défaut, inhibée ou isolée, alarme). Intégration non officielle, sans lien avec Vanderbilt ni Lundix. Jamais testée avec une vraie centrale : voir la documentation."
+      }
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
+      "key": "host",
+      "type": "string",
+      "label": { "en": "Address of the SPC Web Gateway", "fr": "Adresse de la SPC Web Gateway" },
       "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+        "en": "The IP address (or name) of the computer running the SPC Web Gateway; a port may follow (8088 by default). Plain http on your network.",
+        "fr": "L'adresse IP (ou le nom) de l'ordinateur qui fait tourner la SPC Web Gateway ; un port peut suivre (8088 par défaut). En http simple sur votre réseau."
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "placeholder": { "en": "e.g. 192.168.1.10", "fr": "ex. 192.168.1.10" },
+      "required": true
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
+      "key": "username",
+      "type": "string",
+      "label": { "en": "User name of the gateway", "fr": "Identifiant de la passerelle" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "Only if your gateway asks for one; leave empty otherwise.",
+        "fr": "Seulement si votre passerelle en demande un ; sinon laissez vide."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "required": false
     },
     {
-      "key": "unit",
+      "key": "password",
+      "type": "secret",
+      "label": { "en": "Password of the gateway", "fr": "Mot de passe de la passerelle" },
+      "description": {
+        "en": "Only if your gateway asks for one. Sent only to the gateway, only when it asks (Digest when it offers it, else Basic). Kept by Gladys in its database, never shown again, never in the logs. A refused password stops the integration until it is changed or \"Test the connection\" is pressed.",
+        "fr": "Seulement si votre passerelle en demande un. Envoyé seulement à la passerelle, seulement quand elle le demande (Digest si elle le propose, sinon Basic). Gardé par Gladys dans sa base, jamais réaffiché, jamais dans les journaux. Un mot de passe refusé arrête l'intégration jusqu'à ce qu'il soit changé ou qu'on appuie sur « Tester la connexion »."
+      },
+      "required": false
+    },
+    {
+      "key": "options_section",
+      "type": "section",
+      "label": { "en": "Commands", "fr": "Commandes" },
+      "description": {
+        "en": "Setting an area (full set, part set A or B) needs no option: it is the protective command. It is refused in these cases only: no valid address, a configuration changed during the command, the gateway refuses or asks for credentials, another panel answers at the address, a part set while the area is in the other part set, a part set while the state of the area can be read neither now nor from the last read (\"unset\"), earlier sets of the same area that took its whole time; the panel may also refuse it itself (a zone open, for instance). Unsetting (disarming) is off unless you tick the option below. Every command is a button, never a switch: \"turn everything off\" cannot unset the alarm.",
+        "fr": "La mise en service d'un secteur (totale, partielle A ou B) ne demande aucune option : c'est la commande protectrice. Elle est refusée dans ces cas seulement : pas d'adresse valide, une configuration changée pendant la commande, la passerelle refuse ou demande des identifiants, une autre centrale répond à l'adresse, une partielle alors que le secteur est dans l'autre partielle, une partielle alors que l'état du secteur ne peut être lu ni maintenant ni depuis la dernière lecture (« hors service »), des mises en service précédentes du même secteur qui ont pris tout son temps ; la centrale peut aussi la refuser elle-même (zone ouverte, par exemple). La mise hors service (désarmement) est désactivée sauf si vous cochez l'option ci-dessous. Chaque commande est un bouton, jamais un interrupteur : « éteins tout » ne peut pas désarmer l'alarme."
+      }
+    },
+    {
+      "key": "allow_disarm",
+      "type": "boolean",
+      "label": {
+        "en": "Allow unsetting (disarming) from Gladys",
+        "fr": "Autoriser la mise hors service (désarmement) depuis Gladys"
+      },
+      "description": {
+        "en": "Lets the dashboard, the scenes and anyone with access to Gladys unset an area. Off by default.",
+        "fr": "Permet au tableau de bord, aux scènes et à toute personne ayant accès à Gladys de mettre un secteur hors service. Désactivé par défaut."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "zone_kinds",
+      "type": "string",
+      "label": { "en": "Zone kinds (optional)", "fr": "Types des zones (facultatif)" },
+      "description": {
+        "en": "How some zones show, by their number: opening, motion, smoke, leak or input, e.g. \"5:opening, 12:motion\". By default from the zone type of the panel (alarm: motion, entry/exit: opening, fire: smoke, water: leak, others: input). A change shows after \"Update\" in Discovery.",
+        "fr": "Comment certaines zones s'affichent, par leur numéro : opening (ouverture), motion (mouvement), smoke (fumée), leak (fuite) ou input (entrée), par ex. « 5:opening, 12:motion ». Par défaut selon le type de zone de la centrale (alarme : mouvement, entrée/sortie : ouverture, feu : fumée, eau : fuite, autres : entrée). Un changement apparaît après « Mettre à jour » dans Découverte."
+      },
+      "placeholder": { "en": "5:opening, 12:motion", "fr": "5:opening, 12:motion" },
+      "required": false
+    },
+    {
+      "key": "language",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
-    },
-    {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "label": { "en": "Language of the devices", "fr": "Langue des appareils" },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Names of the devices without a name on the panel, of the features and of the modes.",
+        "fr": "Noms des appareils sans nom sur la centrale, des fonctionnalités et des modes."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": "fr",
+      "options": [
+        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
+        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "description": {
+        "en": "Reads the configuration again, tries once despite refused credentials, reads the gateway when the pace allows it (once a minute), then reports.",
+        "fr": "Relit la configuration, fait un essai malgré des identifiants refusés, lit la passerelle quand le rythme le permet (une fois par minute), puis rend compte."
+      },
       "timeout_seconds": 30
     },
     {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
+      "key": "accept_panel",
+      "label": { "en": "Use the panel that answers", "fr": "Utiliser la centrale qui répond" },
       "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+        "en": "Only when the status says another panel answers (a panel replaced): this integration then drives the panel whose serial number the status shows.",
+        "fr": "Seulement quand le statut indique qu'une autre centrale répond (centrale remplacée) : l'intégration pilote alors la centrale dont le statut montre le numéro de série."
       },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "timeout_seconds": 10
     }
   ]
 }

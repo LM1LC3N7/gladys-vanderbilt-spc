@@ -8,19 +8,22 @@ contributors.
 A Gladys Assistant **external integration**: a Node.js service (Node 22+, ESM,
 no build step) that runs in its own sandboxed Docker container and talks to
 Gladys through
-[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
-its only runtime dependency. It started from the official JavaScript template.
+[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js).
+It started from the official JavaScript template. It talks to a Vanderbilt
+SPC alarm panel through the SPC Web Gateway of Lundix (REST + websocket);
+runtime dependencies: the SDK and `ws`.
 
 ## Commands
 
 ```bash
 npm install
 npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+node --test test/commands.test.js         # one file
+node --test --test-name-pattern "unset"   # tests whose name matches
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
+npm run cover                             # cover.png, plain Node
 npx github:GladysAssistant/integration-store .   # store admission checks
 ```
 
@@ -32,17 +35,35 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
-src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+src/handlers.js                   the SDK handlers, shared with the tests
+src/app.js                        SpcApp: lifecycle, pace, events, commands, guards
+src/spc/client.js                 the REST API of the gateway (pyspcwebgw __init__.py)
+src/spc/http.js                   one HTTP request, its own connection, bounded
+src/spc/auth.js                   Digest / Basic answer to a 401 challenge
+src/spc/events.js                 the websocket /ws/spc (`ws`)
+src/spc/parse.js                  answers and events, checked field by field
+src/spc/errors.js                 error codes
+src/devices.js                    model -> Gladys devices and states (pure)
+src/publisher.js                  states under the Gladys rate limits
+src/store.js                      /data: panel serial, last read, refusal marker, guards
+src/config.js                     DEFAULTS (mirror the manifest defaults) + normalization
+src/constants.js, src/i18n.js     codes, limits, timings; French and English texts
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, the SDK's fake Gladys + test/helpers/fakeGateway.js
+scripts/cover.mjs                 the cover, plain Node
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
+
+Safety rules of this integration (see TODO.md "Decisions"): setting an area
+is protective (no option, no read before, never behind a read, a pause or an
+unset; tried again within its time; kept and sent again while not shown);
+unsetting is off by default (option read again right before the write),
+decided on a fresh read, needs the panel identity read in the session;
+commands are push buttons, never switches; a command that may have left is
+never reported "not sent"; refused credentials are never tried again by
+themselves; the credentials are sent only in answer to a challenge of the
+gateway and never logged.
 
 ## Rules
 
@@ -53,11 +74,12 @@ test/                             node --test, against the SDK's fake Gladys (in
   new device and orphans the old one. The same goes for every key users store:
   manifest `config_schema`, `actions`, widget and scene keys, feature keys.
 - **The container rootfs is read-only.** Write only under `/data`, the one
-  writable volume. Never log tokens, passwords or API keys.
+  writable volume. Never log the password, an Authorization header or a
+  user name of the panel.
 - **Versions belong to the Release workflow** (Actions → Release). Never edit
   `version` in `package.json` or in the manifest, nor the `docker_image` tag,
-  by hand — except on the README's hand-pushed tag path, which bumps all three
-  together before tagging. `test/manifest.test.js` checks they agree.
+  by hand (0.1.0 was set once, see TODO.md). `test/manifest.test.js` checks
+  they agree.
 - **Changelog.** Every user-visible change adds a line under `## [Unreleased]`
   in `CHANGELOG.md` (`### Added`, `Changed`, `Fixed`, `Removed`, `Security`).
   Never write a version heading: the Release workflow moves the section, and it
@@ -71,6 +93,12 @@ test/                             node --test, against the SDK's fake Gladys (in
   code (defaults, action, scene and widget handlers): change both sides
   together.
 - **User-facing text** is bilingual (English and French): action messages,
-  manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
+  manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync. A secret
+  field is "kept by Gladys in its database, never shown again", never said
+  to be ciphered (`test/encoding.test.js` checks the words). The docs list
+  exactly when a set is refused: no "always" nor "never" there.
+- **Units**: none here; only `DEVICE_FEATURE_UNITS_BY_CATEGORY` of the core
+  if one is ever added.
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
-  in English. Tests never touch the network.
+  in English. Tests never touch the network (the real transports are tested
+  on loopback only).
