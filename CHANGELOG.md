@@ -19,15 +19,22 @@ the notes of the version's GitHub Release.
   isolated, alarm), plus the link to the gateway. Read every minute, events
   live through the websocket.
 - Setting an area is the protective command: no option, no read before,
-  never behind a read nor the waits after failed reads; tried again every
-  250 ms within 3.5 s, confirmed by a read of the area, kept and sent again
-  (3 times at most, 10 minutes at most, across a restart) while the area
-  does not show it. A part set never lowers a full set.
+  not behind a read, the waits after failed reads nor a refusal of the
+  credentials kept (one try per press); tried again every 250 ms within
+  3.5 s while it does not reach the gateway, confirmed by a read of the area.
+  A set the gateway accepted is not sent a second time (someone inside may
+  have cancelled it at the keypad); one that never reached it is sent again
+  only on a fresh read showing nothing moved at the panel, within 2 minutes.
+  A part set is not sent over a full set read at that moment.
 - Unsetting is off by default (option), needs the serial number of the
   panel read in this session, is decided on a fresh read, at most 6 per area
   per minute.
-- Optional gateway credentials (Digest or Basic, only when asked); a refusal
-  is kept in `/data` as an 8-bit marker and never tried again by itself.
+- Optional gateway credentials, sent only when asked: Digest; Basic only
+  with its option (password readable on the network), never after Digest
+  worked. A refusal is kept in `/data` as an 8-bit marker and the reads are
+  not tried again by themselves.
+- Unsetting counts as in flight from its decision: a set pressed before its
+  connection is up withdraws it.
 - The serial number of the panel is kept: another panel at the address stops
   everything until "Use the panel that answers".
 - "Test the connection" and "Use the panel that answers" buttons;

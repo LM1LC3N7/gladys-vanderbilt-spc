@@ -91,11 +91,15 @@ test('the configuration matches the code; unsetting off by default; the secret w
     'host',
     'username',
     'password',
+    'allow_basic',
     'options_section',
     'allow_disarm',
     'zone_kinds',
     'language',
   ]);
+  assert.equal(fields.allow_basic.type, 'boolean');
+  assert.equal(fields.allow_basic.default, false);
+  assert.match(fields.allow_basic.description.en, /readable by anyone listening/);
   assert.equal(fields.allow_disarm.type, 'boolean');
   assert.equal(fields.allow_disarm.default, false);
   assert.equal(fields.password.type, 'secret');
@@ -109,7 +113,11 @@ test('the configuration matches the code; unsetting off by default; the secret w
   );
   assert.doesNotMatch(JSON.stringify(manifest), /chiffré|encrypted/i);
   assert.match(fields.options_section.description.en, /never a switch/);
-  assert.match(fields.options_section.description.en, /refused in these cases only/);
+  assert.match(fields.options_section.description.en, /listed in the documentation/);
+  assert.match(fields.options_section.description.en, /false alarm/);
+  for (const field of manifest.config_schema) {
+    for (const text of Object.values(field.description ?? {})) assert.ok(text.length <= 1000);
+  }
   assert.doesNotMatch(fields.options_section.description.en, /\b(always|never) (sent|refused)\b/);
 });
 

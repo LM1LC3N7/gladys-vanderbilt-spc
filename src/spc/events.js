@@ -9,7 +9,7 @@
 
 import WebSocket from 'ws';
 import { LIMITS, TIMINGS, WS_PATH } from '../constants.js';
-import { authorization, parseChallenge } from './auth.js';
+import { authorization } from './auth.js';
 import { USER_AGENT } from './client.js';
 
 /** A failure of the handshake: `kind` and the HTTP status, never a server text. */
@@ -42,9 +42,10 @@ export class EventSocket {
   }
 
   /**
-   * Opens: resolves once open; rejects an Error { kind: 'auth_required' |
-   * 'auth_unsupported' | 'auth_refused' | 'http' | 'network', status }. A 401 is answered once with the
-   * credentials (a new handshake).
+   * Opens: resolves once open; rejects an Error { kind, status }: an `auth_*`
+   * code of the client (see GatewayClient.adopt), 'http' or 'network'. A 401
+   * is answered once with the credentials (a new handshake), under the same
+   * rules as the REST requests (Basic only when allowed, never a downgrade).
    */
   async open() {
     let fresh = false;
@@ -63,15 +64,14 @@ export class EventSocket {
       }
       const result = await this.handshake(headers);
       if (result.open) return;
-      if (result.status !== 401)
+      if (result.status !== 401) {
         throw socketError(result.status ? 'http' : 'network', result.status);
-      if (!this.client.credentials) throw socketError('auth_required', 401);
-      const challenge = parseChallenge(result.headers?.['www-authenticate']);
-      if (!challenge) throw socketError('auth_unsupported', 401);
-      const refused =
-        sentWith && (fresh || sentWith.scheme === 'basic') && !(challenge.stale && !fresh);
-      if (refused || attempt === 1) throw socketError('auth_refused', 401);
-      this.client.challenge = challenge;
+      }
+      try {
+        this.client.adopt(result.headers?.['www-authenticate'], { sentWith, fresh, attempt });
+      } catch (err) {
+        throw socketError(err.code ?? 'auth_refused', 401);
+      }
       fresh = true;
     }
   }

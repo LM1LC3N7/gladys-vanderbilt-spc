@@ -155,9 +155,18 @@ export function createFakeGateway({
       if (fake.refuseCommands) {
         return { status: 200, headers: {}, body: Buffer.from('{"status":"failed"}') };
       }
-      const apply = () => fake.setMode(m[1], MODE_CODE[m[2]]);
-      if (fake.applyDelay > 0) fake.timers.setTimeout(apply, fake.applyDelay);
-      else apply();
+      if (fake.ignoreCommands) {
+        return { status: 200, headers: {}, body: Buffer.from('{"status":"success"}') };
+      }
+      const apply = () => {
+        fake.pendingApply.delete(m[1]);
+        fake.setMode(m[1], MODE_CODE[m[2]]);
+      };
+      if (fake.applyDelay > 0) {
+        // The exit time: the area reads as before until it ends.
+        fake.timers.clearTimeout(fake.pendingApply.get(m[1]));
+        fake.pendingApply.set(m[1], fake.timers.setTimeout(apply, fake.applyDelay));
+      } else apply();
       return { status: 200, headers: {}, body: Buffer.from('{"status":"success"}') };
     }
     return { status: 404, headers: {}, body: Buffer.from('') };
@@ -165,6 +174,15 @@ export function createFakeGateway({
 
   fake.wsAuthorized = (req) => authorized('GET', req.url, req.headers.authorization);
   fake.wsChallenge = () => (fake.auth ? challenge() : 'Basic realm="SPC"');
+
+  fake.pendingApply = new Map();
+
+  /** Someone at the keypad unsets the area (cancels an exit time running). */
+  fake.keypadUnset = (id) => {
+    fake.timers.clearTimeout(fake.pendingApply.get(id));
+    fake.pendingApply.delete(id);
+    fake.setMode(id, '0');
+  };
 
   /** The mode of an area changes (a keypad, a command): its times follow. */
   fake.setMode = (id, code) => {
@@ -184,7 +202,13 @@ export function createFakeGateway({
     let settle;
     let lastByte = now();
     let connected = false;
-    const entry = { method, path, at: now(), authorization: Boolean(headers.authorization) };
+    const entry = {
+      method,
+      path,
+      at: now(),
+      authorization: Boolean(headers.authorization),
+      scheme: String(headers.authorization ?? '').split(' ')[0],
+    };
     fake.requests.push(entry);
     const behavior = fake.behaviors.find((b) => matches(b, method, path));
     if (behavior && behavior.times !== undefined) behavior.times -= 1;
@@ -231,47 +255,58 @@ export function createFakeGateway({
         }
         return;
       }
-      connected = true;
-      entry.sent = true;
-      onSent?.();
-      if (action === 'hang') return; // connected, never answers
-      if (action === 'status') {
-        later(
-          () => settle(null, { status: behavior.status, headers: {}, body: Buffer.from('') }),
-          behavior.delay ?? fake.latency,
-        );
-        return;
-      }
-      if (action === 'reset') {
-        later(
-          () => settle(new GatewayError(CODES.RESET, 'Connection closed')),
-          behavior.delay ?? fake.latency,
-        );
-        return;
-      }
-      if (action === 'body') {
-        later(
-          () => settle(null, { status: 200, headers: {}, body: Buffer.from(behavior.body) }),
-          behavior.delay ?? fake.latency,
-        );
-        return;
-      }
-      const delay = behavior?.delay ?? fake.latency;
-      const reply = () => {
-        lastByte = now();
-        try {
-          settle(null, answer(method, path, headers));
-        } catch (err) {
-          settle(err);
+      const respond = () => {
+        const action = behavior?.action;
+        if (action === 'hang') return; // connected, never answers
+        if (action === 'status') {
+          later(
+            () => settle(null, { status: behavior.status, headers: {}, body: Buffer.from('') }),
+            behavior.delay ?? fake.latency,
+          );
+          return;
         }
+        if (action === 'reset') {
+          later(
+            () => settle(new GatewayError(CODES.RESET, 'Connection closed')),
+            behavior.delay ?? fake.latency,
+          );
+          return;
+        }
+        if (action === 'body') {
+          later(
+            () => settle(null, { status: 200, headers: {}, body: Buffer.from(behavior.body) }),
+            behavior.delay ?? fake.latency,
+          );
+          return;
+        }
+        const delay = behavior?.delay ?? fake.latency;
+        const reply = () => {
+          lastByte = now();
+          try {
+            settle(null, answer(method, path, headers));
+          } catch (err) {
+            settle(err);
+          }
+        };
+        if (delay > 0) timers.push(fake.timers.setTimeout(reply, delay));
+        else queueMicrotask(reply);
       };
-      if (delay > 0) timers.push(fake.timers.setTimeout(reply, delay));
-      else queueMicrotask(reply);
+      const proceed = () => {
+        if (done) return;
+        connected = true;
+        entry.sent = true;
+        onSent?.();
+        respond();
+      };
+      if (behavior?.connectDelay) {
+        timers.push(fake.timers.setTimeout(proceed, behavior.connectDelay));
+        return;
+      }
+      proceed();
     });
     promise.handle = handle;
     return promise;
   };
-
   /** The websocket: a fake `ws` client per connection. */
   fake.socketFactory = (url, options) => {
     const socket = new EventEmitter();

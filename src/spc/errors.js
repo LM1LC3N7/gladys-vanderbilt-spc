@@ -17,6 +17,8 @@ export const CODES = Object.freeze({
   AUTH_REQUIRED: 'auth_required', // 401 and no credentials configured
   AUTH_REFUSED: 'auth_refused', // 401 on fresh credentials: refused
   AUTH_UNSUPPORTED: 'auth_unsupported', // a 401 challenge we cannot answer
+  AUTH_BASIC: 'auth_basic', // Basic asked, not allowed by the configuration: nothing sent
+  AUTH_DOWNGRADE: 'auth_downgrade', // Basic asked after Digest worked: nothing sent
   CUT: 'cut', // aborted by us (an arm cut a frozen read, a new configuration)
 });
 
@@ -31,7 +33,12 @@ export class GatewayError extends Error {
   }
 }
 
-export const isAuthError = (err) =>
-  err?.code === CODES.AUTH_REFUSED ||
-  err?.code === CODES.AUTH_REQUIRED ||
-  err?.code === CODES.AUTH_UNSUPPORTED;
+const AUTH_CODES = new Set([
+  CODES.AUTH_REFUSED,
+  CODES.AUTH_REQUIRED,
+  CODES.AUTH_UNSUPPORTED,
+  CODES.AUTH_BASIC,
+  CODES.AUTH_DOWNGRADE,
+]);
+
+export const isAuthError = (err) => AUTH_CODES.has(err?.code);

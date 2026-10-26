@@ -94,7 +94,18 @@ const join = (...parts) => ({
 
 export const T = {
   status: {
-    ok: ({ areas, zones, events, zonesUnread, identityUnread, zoneKindsInvalid, unwritable }) =>
+    ok: ({
+      areas,
+      zones,
+      events,
+      eventsStatus,
+      zonesUnread,
+      identityUnread,
+      zoneKindsInvalid,
+      unwritable,
+      basic,
+      notices = [],
+    }) =>
       join(
         {
           en: `The gateway answers: ${areas} area(s), ${zones} zone(s).`,
@@ -114,6 +125,19 @@ export const T = {
             fr: 'Le websocket de la passerelle refuse la connexion : lecture toutes les minutes seulement.',
           },
         }[events] ?? EMPTY,
+        events === 'down' && eventsStatus
+          ? {
+              en: `The websocket answers HTTP ${eventsStatus} at /ws/spc (path not checked on a real gateway).`,
+              fr: `Le websocket répond HTTP ${eventsStatus} à /ws/spc (chemin non vérifié sur une vraie passerelle).`,
+            }
+          : EMPTY,
+        basic
+          ? {
+              en: 'Basic authentication: the user name and the password are readable by anyone listening on your local network, at every read.',
+              fr: 'Authentification Basic : l’identifiant et le mot de passe sont lisibles par quiconque écoute votre réseau local, à chaque lecture.',
+            }
+          : EMPTY,
+        ...notices,
         zonesUnread
           ? {
               en: 'The zones could not be read at the last read.',
@@ -193,9 +217,17 @@ export const T = {
       en: 'The gateway asks for an authentication this integration does not know (neither Digest nor Basic). No new try until the configuration changes (or "Test the connection").',
       fr: 'La passerelle demande une authentification que l’intégration ne connaît pas (ni Digest ni Basic). Pas de nouvel essai avant un changement de configuration (ou « Tester la connexion »).',
     },
+    authBasic: {
+      en: 'The gateway asks for Basic authentication: the password would be readable on your local network. Nothing sent. Tick "Allow Basic authentication" if you accept it.',
+      fr: 'La passerelle demande une authentification Basic : le mot de passe serait lisible sur votre réseau local. Rien n’est envoyé. Cochez « Autoriser l’authentification Basic » si vous l’acceptez.',
+    },
+    authDowngrade: {
+      en: 'The gateway now asks for Basic authentication after Digest worked (the password would be readable on the network): nothing sent. Check the gateway, then press "Test the connection".',
+      fr: 'La passerelle demande maintenant une authentification Basic alors que Digest marchait (le mot de passe serait lisible sur le réseau) : rien n’est envoyé. Vérifiez la passerelle, puis appuyez sur « Tester la connexion ».',
+    },
     authRefused: {
-      en: 'The gateway refuses the user name or the password. No new try with them: enter other ones (or press "Test the connection" for one try).',
-      fr: 'La passerelle refuse l’identifiant ou le mot de passe. Plus d’essai avec ceux-ci : saisissez-en d’autres (ou appuyez sur « Tester la connexion » pour un essai).',
+      en: 'The gateway refuses the user name or the password. No new read with them: enter other ones (or press "Test the connection" for one try).',
+      fr: 'La passerelle refuse l’identifiant ou le mot de passe. Plus de lecture avec ceux-ci : saisissez-en d’autres (ou appuyez sur « Tester la connexion » pour un essai).',
     },
     otherPanel: (serial) => ({
       en: `Another panel answers at this address (serial ${serial}): nothing is published nor sent. If it is yours (a panel replaced), press "Use the panel that answers".`,
@@ -232,10 +264,32 @@ export const T = {
       fr: `La centrale ${serial} est désormais celle que pilote l’intégration.`,
     }),
   },
+  notices: {
+    notVisible: ({ area, mode, when }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked at ${when} UTC was accepted by the gateway but the area does not show it 60 s later (exit time, a zone open, or cancelled at the keypad): not sent again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée à ${when} UTC a été acceptée par la passerelle mais le secteur ne la montre pas 60 s plus tard (temporisation de sortie, zone ouverte, ou annulée au clavier) : pas renvoyée.`,
+    }),
+    neverLeft: ({ area, mode, when }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked at ${when} UTC never reached the gateway: set it again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée à ${when} UTC n’a jamais atteint la passerelle : refaites-la.`,
+    }),
+    moved: ({ area, mode, when }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked at ${when} UTC did not reach the gateway, and the area changed at the panel since (or was not read before): not sent again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée à ${when} UTC n’a pas atteint la passerelle, et le secteur a changé à la centrale depuis (ou n’avait pas été lu avant) : pas renvoyée.`,
+    }),
+  },
   errors: {
     readOnly: 'This feature is read-only',
     badValue: 'Value refused: a button takes 1 only',
     notConfigured: 'The gateway is not configured (see the status of the integration)',
+    configNotReadYet:
+      'The configuration of Gladys is not read yet (asked again): nothing sent, try again in a moment',
+    authBasic:
+      'The gateway asks for Basic authentication, not allowed in the configuration: nothing sent',
+    authDowngrade:
+      'The gateway now asks for Basic authentication after Digest worked: nothing sent (see the status)',
+    authUnsupported:
+      'The gateway asks for an authentication this integration does not know: nothing sent',
     configChanged: 'The configuration changed meanwhile: nothing sent',
     authRefused:
       'The gateway refuses the user name or the password: command not applied (enter other ones in the configuration, then "Test the connection")',
@@ -257,13 +311,18 @@ export const T = {
       `State of the area not read (${reasonOf(err).en}): a part set could lower a full set, nothing sent (a full set is never held back by this)`,
     otherPartSet: (current) =>
       `The area is in ${MODE_NAMES[current].en}: nothing sent (a part set never replaces the other one; full set, or unset first)`,
+    refusedByGateway: (status) => `Sent, refused by the gateway (HTTP ${status}): not sent again`,
     refusedByPanel:
       'Sent, refused by the panel (the gateway reports a failure: a zone open or in fault, for instance)',
     armNotSent: (err) =>
-      `Not sent: the gateway did not take the request (${reasonOf(err).en}); sent again at the next reads (3 times at most) while the area does not show it`,
+      `Not sent: the gateway did not take the request (${reasonOf(err).en}); sent again within 2 minutes only if a fresh read shows nothing changed at the panel`,
+    armNoAnswer: (err) =>
+      `Sent, no valid answer from the gateway (${reasonOf(err).en}): area read again 5, 20 and 60 s later; sent again within 2 minutes only if nothing changed at the panel`,
     armReplaced: 'Not sent: an unset command of this area, asked after it, left first',
     unconfirmed: (what) =>
-      `Sent and accepted by the gateway, not yet shown by the area (${what}): read again 5, 20 and 60 s later`,
+      `Sent and accepted by the gateway, not yet shown by the area (${what}): read again 5, 20 and 60 s later, not sent again`,
+    disarmUnconfirmed:
+      'Sent and accepted by the gateway, the area does not show it unset yet: read again 5 and 20 s later',
     disarmNotSent: (err) => `Not sent (${reasonOf(err).en})`,
     disarmNoAnswer: (err) =>
       `Sent, no answer from the gateway (${reasonOf(err).en}): read again 5 and 20 s later`,

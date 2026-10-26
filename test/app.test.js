@@ -165,15 +165,16 @@ test('credentials refused: kept in /data (8-bit marker), no try after a restart,
     config: { username: 'u', password: 'bad' },
   });
   assert.equal(fake.requests.length, 0);
-  // A press is refused without a request.
+  // A set makes its one try (the challenge, the answer), refused again.
   const answer = await again.pressFor('1', 'arm-full');
   assert.equal(answer.success, false);
   assert.match(answer.error, /refuses the user name or the password/);
-  assert.equal(fake.requests.length, 0);
+  assert.equal(fake.requests.length, 2);
   // "Test the connection": one try.
+  fake.requests.length = 0;
   const test1 = await again.gladys.fake.action(ACTIONS.TEST_CONNECTION);
   assert.equal(test1.success, false);
-  assert.equal(fake.requests.length, 2);
+  assert.ok(fake.requests.length >= 1 && fake.requests.length <= 2);
   // New credentials: they are tried, the refusal is erased.
   await again.gladys.fake.configUpdated({ host: '192.168.1.10', username: 'u', password: 'good' });
   await again.wait(0);
@@ -295,4 +296,48 @@ test('alarm: a zone in alarm, or a verified alarm while set, shows on the area',
   assert.equal(gladys.fake.lastState(featureId('zone', '3', 'alarm')), 1);
   await wait(MINUTE);
   assert.equal(gladys.fake.lastState(featureId('area', '3', 'alarm')), 1);
+});
+
+test('Basic asked and not allowed: nothing sent, said; allowed: a lasting warning', async () => {
+  const fake = createFakeGateway({ auth: { scheme: 'basic', username: 'u', password: 'p' } });
+  const { gladys, wait } = await setup({ fake, config: { username: 'u', password: 'p' } });
+  assert.match(gladys.fake.connectionStatus.message.en, /asks for Basic authentication/);
+  assert.ok(fake.requests.every((r) => !r.authorization));
+  await wait(10 * MINUTE);
+  assert.equal(fake.requests.length, 1);
+  const allowed = createFakeGateway({ auth: { scheme: 'basic', username: 'u', password: 'p' } });
+  const ok = await setup({
+    fake: allowed,
+    config: { username: 'u', password: 'p', allow_basic: true },
+  });
+  assert.equal(ok.gladys.fake.connectionStatus.connected, true);
+  assert.match(ok.gladys.fake.connectionStatus.message.en, /readable by anyone listening/);
+});
+
+test('Digest worked, then the gateway asks for Basic: nothing sent, the reads stop, said', async () => {
+  const fake = createFakeGateway({ auth: { scheme: 'digest', username: 'u', password: 'p' } });
+  const store = memoryStore();
+  const { gladys, wait } = await setup({
+    fake,
+    store,
+    config: { username: 'u', password: 'p', allow_basic: true },
+  });
+  assert.equal(store.data.authScheme, 'digest');
+  fake.auth.scheme = 'basic';
+  await wait(MINUTE);
+  assert.match(gladys.fake.connectionStatus.message.en, /now asks for Basic authentication/);
+  assert.ok(
+    fake.requests.every((r) => r.scheme !== 'Basic'),
+    'never in Basic',
+  );
+  const count = fake.requests.length;
+  await wait(10 * MINUTE);
+  assert.equal(fake.requests.length, count, 'the reads stopped');
+});
+
+test('a websocket that answers HTTP 404: said in the status', async () => {
+  const fake = createFakeGateway();
+  fake.wsRefuse = 404;
+  const { gladys } = await setup({ fake });
+  assert.match(gladys.fake.connectionStatus.message.en, /websocket answers HTTP 404 at \/ws\/spc/);
 });

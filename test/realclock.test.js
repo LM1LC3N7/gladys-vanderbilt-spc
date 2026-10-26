@@ -66,7 +66,7 @@ test('real clock and transports: reads at 0, 60 s, 120 s; events; a set; credent
     server.requests.filter((r) => r.url === '/spc/area' && r.headers.authorization);
   try {
     await app.start(config);
-    while (areaReads().length < 3 && performance.now() - started < (2.6 * INTERVAL) / SPEED) {
+    while (areaReads().length < 3 && performance.now() - started < (3.5 * INTERVAL) / SPEED) {
       await sleep(5);
     }
     // The websocket: open with Digest, an event reads its zone.

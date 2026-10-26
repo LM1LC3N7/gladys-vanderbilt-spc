@@ -16,7 +16,10 @@
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "How it works", "fr": "Fonctionnement" },
+      "label": {
+        "en": "How it works",
+        "fr": "Fonctionnement"
+      },
       "description": {
         "en": "Gladys talks to the SPC Web Gateway (Lundix software, installed separately) on your network, without any cloud: it reads the areas and zones of your Vanderbilt SPC panel every minute and receives its events live. Each area becomes a device (mode, armed, alarm, and buttons: full set, part set A, part set B, unset), each zone another (state, trouble, inhibited or isolated, alarm). Unofficial integration, not affiliated with Vanderbilt nor Lundix. Never tested with a real panel: see the documentation.",
         "fr": "Gladys dialogue avec la SPC Web Gateway (logiciel Lundix, installé à part) sur votre réseau, sans cloud : elle lit les secteurs et les zones de votre centrale Vanderbilt SPC toutes les minutes et reçoit ses événements en direct. Chaque secteur devient un appareil (mode, armé, alarme, et boutons : mise en service totale, partielle A, partielle B, mise hors service), chaque zone un autre (état, défaut, inhibée ou isolée, alarme). Intégration non officielle, sans lien avec Vanderbilt ni Lundix. Jamais testée avec une vraie centrale : voir la documentation."
@@ -25,18 +28,27 @@
     {
       "key": "host",
       "type": "string",
-      "label": { "en": "Address of the SPC Web Gateway", "fr": "Adresse de la SPC Web Gateway" },
+      "label": {
+        "en": "Address of the SPC Web Gateway",
+        "fr": "Adresse de la SPC Web Gateway"
+      },
       "description": {
         "en": "The IP address (or name) of the computer running the SPC Web Gateway; a port may follow (8088 by default). Plain http on your network.",
         "fr": "L'adresse IP (ou le nom) de l'ordinateur qui fait tourner la SPC Web Gateway ; un port peut suivre (8088 par défaut). En http simple sur votre réseau."
       },
-      "placeholder": { "en": "e.g. 192.168.1.10", "fr": "ex. 192.168.1.10" },
+      "placeholder": {
+        "en": "e.g. 192.168.1.10",
+        "fr": "ex. 192.168.1.10"
+      },
       "required": true
     },
     {
       "key": "username",
       "type": "string",
-      "label": { "en": "User name of the gateway", "fr": "Identifiant de la passerelle" },
+      "label": {
+        "en": "User name of the gateway",
+        "fr": "Identifiant de la passerelle"
+      },
       "description": {
         "en": "Only if your gateway asks for one; leave empty otherwise.",
         "fr": "Seulement si votre passerelle en demande un ; sinon laissez vide."
@@ -46,20 +58,40 @@
     {
       "key": "password",
       "type": "secret",
-      "label": { "en": "Password of the gateway", "fr": "Mot de passe de la passerelle" },
+      "label": {
+        "en": "Password of the gateway",
+        "fr": "Mot de passe de la passerelle"
+      },
       "description": {
-        "en": "Only if your gateway asks for one. Sent only to the gateway, only when it asks (Digest when it offers it, else Basic). Kept by Gladys in its database, never shown again, never in the logs. A refused password stops the integration until it is changed or \"Test the connection\" is pressed.",
-        "fr": "Seulement si votre passerelle en demande un. Envoyé seulement à la passerelle, seulement quand elle le demande (Digest si elle le propose, sinon Basic). Gardé par Gladys dans sa base, jamais réaffiché, jamais dans les journaux. Un mot de passe refusé arrête l'intégration jusqu'à ce qu'il soit changé ou qu'on appuie sur « Tester la connexion »."
+        "en": "Only if your gateway asks for one. Sent only to the gateway, only when it asks: Digest when it offers it (the password itself does not travel); Basic only if allowed below. Kept by Gladys in its database, never shown again, never in the logs. A password refused by the gateway stops the reads until it is changed or \"Test the connection\" is pressed (a set still makes one try per press).",
+        "fr": "Seulement si votre passerelle en demande un. Envoyé seulement à la passerelle, seulement quand elle le demande : Digest si elle le propose (le mot de passe lui-même ne circule pas) ; Basic seulement si autorisé ci-dessous. Gardé par Gladys dans sa base, jamais réaffiché, jamais dans les journaux. Un mot de passe refusé par la passerelle arrête les lectures jusqu'à ce qu'il soit changé ou qu'on appuie sur « Tester la connexion » (une mise en service fait quand même un essai par appui)."
       },
       "required": false
     },
     {
+      "key": "allow_basic",
+      "type": "boolean",
+      "label": {
+        "en": "Allow Basic authentication",
+        "fr": "Autoriser l'authentification Basic"
+      },
+      "description": {
+        "en": "Only if your gateway offers Basic and not Digest. With Basic, the user name and the password are readable by anyone listening on your local network, at every read (every minute); with them, the alarm can be unset. Off by default. Once Digest worked, Basic is not answered any more (until \"Test the connection\").",
+        "fr": "Seulement si votre passerelle propose Basic et pas Digest. En Basic, l'identifiant et le mot de passe sont lisibles par quiconque écoute votre réseau local, à chaque lecture (toutes les minutes) ; avec eux, on peut désarmer l'alarme. Désactivé par défaut. Une fois Digest réussi, Basic n'est plus répondu (jusqu'à « Tester la connexion »)."
+      },
+      "required": false,
+      "default": false
+    },
+    {
       "key": "options_section",
       "type": "section",
-      "label": { "en": "Commands", "fr": "Commandes" },
+      "label": {
+        "en": "Commands",
+        "fr": "Commandes"
+      },
       "description": {
-        "en": "Setting an area (full set, part set A or B) needs no option: it is the protective command. It is refused in these cases only: no valid address, a configuration changed during the command, the gateway refuses or asks for credentials, another panel answers at the address, a part set while the area is in the other part set, a part set while the state of the area can be read neither now nor from the last read (\"unset\"), earlier sets of the same area that took its whole time; the panel may also refuse it itself (a zone open, for instance). Unsetting (disarming) is off unless you tick the option below. Every command is a button, never a switch: \"turn everything off\" cannot unset the alarm.",
-        "fr": "La mise en service d'un secteur (totale, partielle A ou B) ne demande aucune option : c'est la commande protectrice. Elle est refusée dans ces cas seulement : pas d'adresse valide, une configuration changée pendant la commande, la passerelle refuse ou demande des identifiants, une autre centrale répond à l'adresse, une partielle alors que le secteur est dans l'autre partielle, une partielle alors que l'état du secteur ne peut être lu ni maintenant ni depuis la dernière lecture (« hors service »), des mises en service précédentes du même secteur qui ont pris tout son temps ; la centrale peut aussi la refuser elle-même (zone ouverte, par exemple). La mise hors service (désarmement) est désactivée sauf si vous cochez l'option ci-dessous. Chaque commande est un bouton, jamais un interrupteur : « éteins tout » ne peut pas désarmer l'alarme."
+        "en": "Setting an area (full set, part set A or B) needs no option: it is the protective command. The cases where it is refused are listed in the documentation (credentials, another panel, a part set over the other one or over an area that cannot be read...); the gateway or the panel may also refuse it. A set the gateway accepted is not sent a second time. Setting while someone is inside can raise a false alarm (sirens, monitoring company). Unsetting (disarming) is off unless you tick the option below. Every command is a button, never a switch: \"turn everything off\" cannot unset the alarm.",
+        "fr": "La mise en service d'un secteur (totale, partielle A ou B) ne demande aucune option : c'est la commande protectrice. Les cas où elle est refusée sont listés dans la documentation (identifiants, autre centrale, partielle sur l'autre ou sur un secteur illisible…) ; la passerelle ou la centrale peuvent aussi la refuser. Une mise en service acceptée par la passerelle n'est pas envoyée une deuxième fois. Mettre en service avec quelqu'un à l'intérieur peut déclencher une fausse alarme (sirènes, télésurveillance). La mise hors service (désarmement) est désactivée sauf si vous cochez l'option ci-dessous. Chaque commande est un bouton, jamais un interrupteur : « éteins tout » ne peut pas désarmer l'alarme."
       }
     },
     {
@@ -70,8 +102,8 @@
         "fr": "Autoriser la mise hors service (désarmement) depuis Gladys"
       },
       "description": {
-        "en": "Lets the dashboard, the scenes and anyone with access to Gladys unset an area. Off by default.",
-        "fr": "Permet au tableau de bord, aux scènes et à toute personne ayant accès à Gladys de mettre un secteur hors service. Désactivé par défaut."
+        "en": "No code is asked: once ticked, any user of Gladys, any scene, the mobile app and a dashboard on a tablet at the entrance can unset an area. Do not put this button on a dashboard reachable from the entrance. Off by default.",
+        "fr": "Aucun code n'est demandé : une fois cochée, tout utilisateur de Gladys, toute scène, l'application mobile et un tableau de bord sur une tablette d'entrée peuvent mettre un secteur hors service. Ne placez pas ce bouton sur un tableau de bord accessible depuis l'entrée. Désactivé par défaut."
       },
       "required": false,
       "default": false
@@ -79,18 +111,27 @@
     {
       "key": "zone_kinds",
       "type": "string",
-      "label": { "en": "Zone kinds (optional)", "fr": "Types des zones (facultatif)" },
+      "label": {
+        "en": "Zone kinds (optional)",
+        "fr": "Types des zones (facultatif)"
+      },
       "description": {
         "en": "How some zones show, by their number: opening, motion, smoke, leak or input, e.g. \"5:opening, 12:motion\". By default from the zone type of the panel (alarm: motion, entry/exit: opening, fire: smoke, water: leak, others: input). A change shows after \"Update\" in Discovery.",
         "fr": "Comment certaines zones s'affichent, par leur numéro : opening (ouverture), motion (mouvement), smoke (fumée), leak (fuite) ou input (entrée), par ex. « 5:opening, 12:motion ». Par défaut selon le type de zone de la centrale (alarme : mouvement, entrée/sortie : ouverture, feu : fumée, eau : fuite, autres : entrée). Un changement apparaît après « Mettre à jour » dans Découverte."
       },
-      "placeholder": { "en": "5:opening, 12:motion", "fr": "5:opening, 12:motion" },
+      "placeholder": {
+        "en": "5:opening, 12:motion",
+        "fr": "5:opening, 12:motion"
+      },
       "required": false
     },
     {
       "key": "language",
       "type": "select",
-      "label": { "en": "Language of the devices", "fr": "Langue des appareils" },
+      "label": {
+        "en": "Language of the devices",
+        "fr": "Langue des appareils"
+      },
       "description": {
         "en": "Names of the devices without a name on the panel, of the features and of the modes.",
         "fr": "Noms des appareils sans nom sur la centrale, des fonctionnalités et des modes."
@@ -98,15 +139,30 @@
       "required": false,
       "default": "fr",
       "options": [
-        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
-        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
       ]
     }
   ],
   "actions": [
     {
       "key": "test_connection",
-      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
       "description": {
         "en": "Reads the configuration again, tries once despite refused credentials, reads the gateway when the pace allows it (once a minute), then reports.",
         "fr": "Relit la configuration, fait un essai malgré des identifiants refusés, lit la passerelle quand le rythme le permet (une fois par minute), puis rend compte."
@@ -115,7 +171,10 @@
     },
     {
       "key": "accept_panel",
-      "label": { "en": "Use the panel that answers", "fr": "Utiliser la centrale qui répond" },
+      "label": {
+        "en": "Use the panel that answers",
+        "fr": "Utiliser la centrale qui répond"
+      },
       "description": {
         "en": "Only when the status says another panel answers (a panel replaced): this integration then drives the panel whose serial number the status shows.",
         "fr": "Seulement quand le statut indique qu'une autre centrale répond (centrale remplacée) : l'intégration pilote alors la centrale dont le statut montre le numéro de série."

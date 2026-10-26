@@ -96,6 +96,10 @@ export class SpcApp {
     this.guards = new Map();
     /** Areas whose arm is being sent (by a press or a guard). */
     this.resending = new Set();
+    /** What happened to a set no longer followed, shown in the status: area -> { en, fr }. */
+    this.notices = new Map();
+    /** The last set or unset event of the panel by area (monotonic). */
+    this.areaEventAt = new Map();
     /** The last "Test the connection" read (monotonic). */
     this.lastForcedAt = undefined;
     this.reset();
@@ -125,6 +129,8 @@ export class SpcApp {
     // Websocket.
     this.events = null;
     this.eventsState = 'down';
+    /** The HTTP status of the last websocket handshake refused (not 401). */
+    this.eventsStatus = undefined;
     this.wsTimer = undefined;
     this.pingTimer = undefined;
     this.wsRetry = 0;
@@ -250,14 +256,18 @@ export class SpcApp {
     const now = this.now();
     const mono = this.monotonic();
     const memory = normalizeMemory(raw, now);
-    // Arms asked since the start (before /data was read) win over the kept ones.
+    // Sets that never reached the gateway before the restart (2 min at most):
+    // sent again only on a fresh read that shows the area as it was at the
+    // press. Sets asked since the start (before /data was read) win.
     for (const [area, kept] of memory.guards) {
       if (this.guards.has(area)) continue;
+      const atMono = mono - (now - kept.at);
       this.guards.set(area, {
         ...kept,
-        atMono: mono - (now - kept.at),
+        atMono,
+        eventsFrom: atMono,
+        overlap: false,
         followIndex: TIMINGS.followUps.length,
-        restart: true,
         followTimer: undefined,
       });
     }
@@ -273,20 +283,7 @@ export class SpcApp {
 
   async save() {
     if (!this.memory) return;
-    this.memory.guards = new Map(
-      [...this.guards.values()].map((g) => [
-        g.area,
-        {
-          area: g.area,
-          mode: g.mode,
-          at: g.at,
-          resends: g.resends,
-          delivered: g.delivered,
-          setTime: g.setTime,
-          overlap: g.overlap,
-        },
-      ]),
-    );
+    this.memory.guards = new Map([...this.guards.values()].map((g) => [g.area, g]));
     try {
       await this.store.save(serializeMemory(this.memory));
       this.saveWarned = false;
@@ -300,7 +297,7 @@ export class SpcApp {
     const config = normalizeConfig(raw);
     const key = configKey(config);
     if (this.client && key === this.key && this.running) {
-      if (force) this.lift();
+      if (force) await this.lift();
       await this.resume();
       return;
     }
@@ -333,7 +330,11 @@ export class SpcApp {
       request: this.request,
       monotonic: this.monotonic,
       random: this.random,
+      allowBasic: config.allowBasic,
+      pinnedScheme: this.memory?.authScheme ?? null,
     });
+    // The follow-up reads of the guards go on with the new session.
+    for (const guard of this.guards.values()) this.scheduleFollow(guard);
     this.logger.info(
       `Using the gateway at ${config.gateway.origin}${config.credentials ? ' (with credentials)' : ''}`,
     );
@@ -355,7 +356,9 @@ export class SpcApp {
       }, TIMINGS.dataRetry);
       return;
     }
-    // A refusal kept for these very credentials: no try until the user acts.
+    if (this.client) this.client.pinnedScheme = this.memory.authScheme;
+    // A refusal kept for these very credentials: no read until the user acts
+    // (a set still makes its one try per press).
     const refused = this.memory.refused;
     if (refused && sameRefused(refused, this.config.credentials) && !force) {
       this.authStop = { kind: 'refused' };
@@ -368,12 +371,16 @@ export class SpcApp {
       this.memory.refused = null;
       await this.save();
     }
-    if (force) this.lift();
+    if (force) await this.lift();
     this.schedule();
   }
 
-  /** The user pressed "Test the connection": one try despite a stop on credentials. */
-  lift() {
+  /**
+   * The user pressed "Test the connection": one try despite a stop on
+   * credentials; a Digest pin is forgotten (the user checked the gateway;
+   * Basic still needs its option).
+   */
+  async lift() {
     const mono = this.monotonic();
     if (this.lastForcedAt !== undefined && mono - this.lastForcedAt < TIMINGS.testGap) return;
     this.lastForcedAt = mono;
@@ -381,6 +388,30 @@ export class SpcApp {
     this.commandAuthRefused = false;
     this.nextTryAt = undefined;
     this.retryDelay = TIMINGS.retryMin;
+    if (this.memory?.authScheme) {
+      this.memory.authScheme = null;
+      if (this.client) {
+        this.client.pinnedScheme = null;
+        this.client.learnedScheme = null;
+      }
+      await this.save();
+    }
+  }
+
+  /** The credentials worked again (a set, a read): the refusal kept is lifted. */
+  async authRecovered() {
+    if (!this.authStop && !this.commandAuthRefused && !this.memory?.refused) return;
+    const stopped = this.authStop !== null;
+    this.authStop = null;
+    this.commandAuthRefused = false;
+    if (this.memory?.refused) {
+      this.memory.refused = null;
+      await this.save();
+    }
+    if (stopped) {
+      this.logger.info('The gateway accepts the credentials again: reads resumed');
+      this.schedule();
+    }
   }
 
   configProblem(config) {
@@ -525,11 +556,12 @@ export class SpcApp {
   /** The main resource refused the credentials (or asks for some): stop until the user acts. */
   async authFailed(err) {
     const kind =
-      err.code === CODES.AUTH_REFUSED
-        ? 'refused'
-        : err.code === CODES.AUTH_UNSUPPORTED
-          ? 'unsupported'
-          : 'required';
+      {
+        [CODES.AUTH_REFUSED]: 'refused',
+        [CODES.AUTH_UNSUPPORTED]: 'unsupported',
+        [CODES.AUTH_BASIC]: 'basic',
+        [CODES.AUTH_DOWNGRADE]: 'downgrade',
+      }[err.code] ?? 'required';
     this.authStop = { kind };
     this.online = false;
     this.events?.close();
@@ -540,13 +572,23 @@ export class SpcApp {
       await this.save();
     }
     this.logger.warn(
-      `The gateway ${kind === 'refused' ? 'refuses the credentials' : 'asks for an authentication'}: no new try until the user acts`,
+      `The gateway ${
+        {
+          refused: 'refuses the credentials',
+          basic: 'asks for Basic (not allowed), nothing sent',
+          downgrade: 'asks for Basic after Digest worked, nothing sent',
+        }[kind] ?? 'asks for an authentication'
+      }: no new read until the user acts`,
     );
     await this.publishOffline();
     await this.setStatus(
       false,
-      { refused: T.status.authRefused, unsupported: T.status.authUnsupported }[kind] ??
-        T.status.authRequired,
+      {
+        refused: T.status.authRefused,
+        unsupported: T.status.authUnsupported,
+        basic: T.status.authBasic,
+        downgrade: T.status.authDowngrade,
+      }[kind] ?? T.status.authRequired,
     );
   }
 
@@ -558,6 +600,7 @@ export class SpcApp {
       this.memory.refused = null;
       await this.save();
     }
+    await this.noteScheme();
     if (areas.dropped > 0) this.logger.warn(`${areas.dropped} area(s) not understood, ignored`);
     if (panel) {
       this.model.panel = panel;
@@ -591,7 +634,8 @@ export class SpcApp {
     }
     this.zonesUnread = !zones;
     this.readAt = this.monotonic();
-    this.checkGuards();
+    // This read left after every press: a fresh read for the guards.
+    this.checkGuards({ fresh: true, seq });
     await this.publishDiscovered();
     await this.publishStates();
     await this.publishTransports();
@@ -599,12 +643,22 @@ export class SpcApp {
     this.ensureEvents();
   }
 
+  /** Digest worked: kept in /data, Basic is then never answered (no downgrade). */
+  async noteScheme() {
+    const scheme = this.client?.learnedScheme;
+    if (!scheme || !this.memory || this.memory.authScheme === scheme) return;
+    if (this.memory.authScheme === 'digest') return;
+    this.memory.authScheme = scheme;
+    await this.save();
+  }
+
   /** Areas read: newer than what the model holds only (by read number). */
   applyAreas(byId, seq, { replace = false } = {}) {
     const next = replace ? new Map() : this.model.areas;
+    const mono = this.monotonic();
     for (const [id, area] of byId) {
       const known = this.model.areas.get(id);
-      next.set(id, known && known.seq > seq ? known : { ...area, seq });
+      next.set(id, known && known.seq > seq ? known : { ...area, seq, readMono: mono });
     }
     this.model.areas = next;
     for (const id of this.model.verified) {
@@ -650,8 +704,11 @@ export class SpcApp {
         events: this.eventsState,
         zonesUnread: this.zonesUnread,
         identityUnread: this.identity !== 'ok',
+        eventsStatus: this.eventsStatus,
         zoneKindsInvalid: this.config.zoneKindsInvalid,
         unwritable: this.saveWarned,
+        basic: this.client?.learnedScheme === 'basic',
+        notices: [...this.notices.values()].slice(-3),
       }),
     );
   }
@@ -763,6 +820,10 @@ export class SpcApp {
         return;
       }
       this.logger.debug(`Websocket not opened (${err?.kind ?? 'error'} ${err?.status ?? ''})`);
+      if (err?.kind === 'http' && err.status && this.eventsStatus !== err.status) {
+        this.eventsStatus = err.status;
+        await this.refreshStatus();
+      }
       this.retryEvents();
       return;
     }
@@ -772,6 +833,7 @@ export class SpcApp {
     }
     this.wsRetry = 0;
     this.eventsState = 'live';
+    this.eventsStatus = undefined;
     this.logger.info('Websocket open: live events');
     this.startPing(socket);
     await this.refreshStatus();
@@ -831,6 +893,11 @@ export class SpcApp {
     }
     const event = parseEvent(text);
     if (!event) return;
+    if (SIA.MOVES.has(event.code)) {
+      // Someone set or unset at the panel (CL / OP name a user: every area).
+      const areas = SIA.ALL_AREAS.has(event.code) ? [...this.model.areas.keys()] : [event.address];
+      for (const id of areas) if (id !== null) this.areaEventAt.set(id, mono);
+    }
     if (SIA.ALL_AREAS.has(event.code)) {
       for (const id of this.model.areas.keys()) this.markDirty('area', id);
     } else if (SIA.AREA.has(event.code) && event.address !== null) {
@@ -931,26 +998,32 @@ export class SpcApp {
   // Setting (arming) is the protective command: it needs no option, no read
   // made before (it works from the start, before the first read), it is not
   // held back by the waits between failed reads, nor by a read running (its
-  // own connection; a read silent for 1 s is cut), nor by an unset command
-  // waiting: it withdraws the unset commands of its area not written yet.
-  // Its request is tried again every 250 ms until 3.5 s after the press; the
-  // area is read back until 4.3 s. A set not seen applied keeps a guard: the
-  // area is read again 5, 20 and 60 s later, and the set is sent again (3
-  // times at most, 10 minutes at most) when the request never reached the
-  // gateway, when an unset command of Gladys in flight may have landed after
-  // it, or when the area still does not show it at the last of those reads.
-  // A guard is lifted when the area shows the mode, when the area was set
-  // then unset by someone else (its last set time moved), or by an unset
-  // command of Gladys asked after it once that request left.
+  // own connection; a read silent for 1 s is cut), nor by a refusal of the
+  // credentials kept (one try per press), nor by an unset command of its area
+  // not connected yet: it withdraws them (cut before they leave).
+  // Its request is tried again every 250 ms until 3.5 s after the press
+  // (twice at most on a 5xx answer); the area is read back until 4.3 s.
   //
-  // A part set never lowers a full set (nothing sent) nor replaces the other
-  // part set (refused): it reads the area first (1.2 s), and when that read
-  // fails it is sent only if the last state known is "unset".
+  // Who has the last word: someone may be inside and cancel a set at the
+  // keypad (exit time). So a set the gateway ACCEPTED is never sent again:
+  // the area is read 5, 20 and 60 s later to publish it, and if it still
+  // does not show the mode the status says so. A set that never reached the
+  // gateway (or whose unset of Gladys, older, was in flight) is sent again,
+  // 3 times at most and within 2 minutes of the press, only on a fresh read
+  // that shows the area exactly as it was at the press (mode, last set time,
+  // last unset time; a reference read less than 150 s before the press) and
+  // with no set or unset event of the panel since the press.
+  //
+  // A part set is not sent over a full set read now, nor over the other part
+  // set (refused): it reads the area first (1.2 s), and when that read fails
+  // it is sent only if the last state read was "unset".
   //
   // Unsetting (disarming) is off by default (option, checked when asked and
   // right before the write), needs the identity of the panel read in this
-  // session, at most 6 per area per minute, one at a time per area, decided
-  // on the area read now (by 2.5 s), written by 3.5 s, confirmed by a read.
+  // session and again with its fresh read, at most 6 per area per minute, one
+  // at a time per area, decided on the area read now (by 2.5 s), written by
+  // 3.5 s, confirmed by a read. It counts as in flight from the moment it is
+  // decided: a set pressed meanwhile knows it may land after it.
 
   async setValue(_device, feature, value) {
     const received = this.monotonic();
@@ -963,13 +1036,25 @@ export class SpcApp {
     return this.arm(target.id, ARM_BUTTONS[target.key], received);
   }
 
-  /** What refuses any command before anything is sent. */
-  commonChecks() {
-    if (!this.client || !this.running) throw new Refused(T.errors.notConfigured);
-    if (this.authStop?.kind === 'refused' || this.commandAuthRefused) {
-      throw new Refused(T.errors.authRefused);
+  /**
+   * What refuses a command before anything is sent. `protective`: a set is
+   * not held back by a refusal of the credentials kept (it makes its try).
+   */
+  commonChecks({ protective = false } = {}) {
+    if (!this.client || !this.running) {
+      throw new Refused(this.key === null ? T.errors.configNotReadYet : T.errors.notConfigured);
     }
-    if (this.authStop) throw new Refused(T.errors.authRequired);
+    const refused = this.authStop?.kind === 'refused' || this.commandAuthRefused;
+    if (refused && !protective) throw new Refused(T.errors.authRefused);
+    if (this.authStop && this.authStop.kind !== 'refused') {
+      throw new Refused(
+        {
+          basic: T.errors.authBasic,
+          downgrade: T.errors.authDowngrade,
+          unsupported: T.errors.authUnsupported,
+        }[this.authStop.kind] ?? T.errors.authRequired,
+      );
+    }
     if (this.identity === 'other') throw new Refused(T.errors.otherPanel);
   }
 
@@ -983,22 +1068,35 @@ export class SpcApp {
     return new Promise((resolve) => this.timers.setTimeout(resolve, Math.max(0, ms)));
   }
 
-  /** A disarm of this area written and not answered, or answered less than answerBy ago. */
+  /** An unset of this area decided and not answered, or answered less than answerBy ago. */
   disarmUncertain(area, mono) {
     if ((this.disarmsInFlight.get(area) ?? 0) > 0) return true;
     const at = this.disarmSettledAt.get(area);
     return at !== undefined && mono - at < TIMINGS.answerBy;
   }
 
+  /** A set withdraws the unsets of its area waiting, or decided but not connected yet. */
   withdrawDisarms(area) {
     let count = 0;
     for (const ticket of this.disarmTickets) {
-      if (ticket.area === area && !ticket.writing && !ticket.withdrawn) {
+      if (ticket.area !== area || ticket.withdrawn) continue;
+      if (!ticket.writing) {
         ticket.withdrawn = true;
+        count += 1;
+      } else if (ticket.handle && !ticket.handle.connected && !ticket.sent) {
+        // Its request is not on the wire yet: cut, nothing leaves.
+        ticket.withdrawn = true;
+        ticket.handle.abort();
         count += 1;
       }
     }
     if (count > 0) this.logger.warn(`Unset WITHDRAWN (area ${area}): a set was asked after it`);
+  }
+
+  setNotice(area, text) {
+    this.notices.delete(area);
+    if (text) this.notices.set(area, text);
+    void this.refreshStatus();
   }
 
   /**
@@ -1008,7 +1106,7 @@ export class SpcApp {
   async arm(area, mode, received) {
     const label = `${MODE_NAMES[mode].en} of area ${area}`;
     try {
-      this.commonChecks();
+      this.commonChecks({ protective: true });
     } catch (err) {
       this.logger.warn(`Set REFUSED (${label}): ${err.message}`);
       throw err;
@@ -1016,6 +1114,7 @@ export class SpcApp {
     const client = this.client;
     const generation = this.generation;
     this.withdrawDisarms(area);
+    if (this.notices.has(area)) this.setNotice(area, null);
     let release;
     const written = new Promise((resolve) => {
       release = resolve;
@@ -1039,7 +1138,7 @@ export class SpcApp {
       throw new Refused(T.errors.busy);
     }
     this.stillSame(client, generation);
-    this.commonChecks();
+    this.commonChecks({ protective: true });
     if (mode !== 'full_set') {
       const current = await this.currentForPart(area, received, client, label);
       this.stillSame(client, generation);
@@ -1073,9 +1172,22 @@ export class SpcApp {
     });
     release();
     if (outcome.lifted) throw new Error(T.errors.armReplaced);
+    if (outcome.failed) {
+      // The gateway reports a failure: an area already set may answer so.
+      const shown = await this.confirmArea(area, received + TIMINGS.answerBy, client, (a) =>
+        shows(a, mode),
+      );
+      this.dropGuard(guard, 'the gateway reports a failure');
+      if (shown) {
+        this.logger.info(`Set (${label}): the gateway reports a failure, the area shows it`);
+        return;
+      }
+      this.logger.warn(`Set REFUSED by the panel (${label})`);
+      throw new Error(T.errors.refusedByPanel);
+    }
     if (!outcome.delivered) {
       throw new Error(
-        outcome.sent ? T.errors.disarmNoAnswer(outcome.error) : T.errors.armNotSent(outcome.error),
+        outcome.sent ? T.errors.armNoAnswer(outcome.error) : T.errors.armNotSent(outcome.error),
       );
     }
     const confirmed = await this.confirmArea(area, received + TIMINGS.answerBy, client, (a) =>
@@ -1091,7 +1203,7 @@ export class SpcApp {
       this.logger.info(`Set confirmed by the area read back (${label})`);
       return;
     }
-    this.logger.warn(`Set sent, NOT confirmed yet (${label}): read again 5, 20 and 60 s later`);
+    this.logger.warn(`Set accepted, NOT shown yet (${label}): read again 5, 20 and 60 s later`);
     throw new Error(T.errors.unconfirmed(MODE_NAMES[mode].en));
   }
 
@@ -1120,13 +1232,15 @@ export class SpcApp {
   }
 
   /**
-   * Sends an arm, again every 250 ms while its request does not reach the
-   * gateway, until sendBy. -> { delivered, sent, error }. Throws Refused on
-   * a refusal of the panel or of the credentials (the guard is lifted).
+   * Sends a set, again every 250 ms while its request does not reach the
+   * gateway (a 5xx answer: one more try), until sendBy.
+   * -> { delivered, sent, error } | { failed: true } | { lifted: true }.
+   * Throws on a 4xx or a refusal of the credentials (the guard is lifted).
    */
   async sendArm(guard, { client, generation, sendBy, deadline, onWritten, label }) {
     let sent = false;
     let error;
+    let serverErrors = 0;
     this.resending.add(guard.area);
     try {
       for (;;) {
@@ -1148,26 +1262,38 @@ export class SpcApp {
           });
           guard.delivered = true;
           void this.save();
+          void this.authRecovered();
           return { delivered: true, sent: true };
         } catch (err) {
           error = err;
-          if (err?.code === CODES.FAILED) {
-            this.dropGuard(guard, 'refused by the panel');
-            this.logger.warn(`Set REFUSED by the panel (${label})`);
-            throw new Refused(T.errors.refusedByPanel);
-          }
+          if (err?.code === CODES.FAILED) return { failed: true, sent: true };
           if (isAuthError(err)) {
             this.dropGuard(guard, 'credentials');
-            this.commandAuthRefused = err.code === CODES.AUTH_REFUSED;
+            if (err.code === CODES.AUTH_REFUSED) this.commandAuthRefused = true;
             this.logger.warn(`Set REFUSED (${label}): ${err.code}`);
             throw new Refused(
-              err.code === CODES.AUTH_REFUSED ? T.errors.authRefused : T.errors.authRequired,
+              {
+                [CODES.AUTH_REFUSED]: T.errors.authRefused,
+                [CODES.AUTH_BASIC]: T.errors.authBasic,
+                [CODES.AUTH_DOWNGRADE]: T.errors.authDowngrade,
+                [CODES.AUTH_UNSUPPORTED]: T.errors.authUnsupported,
+              }[err.code] ?? T.errors.authRequired,
             );
           }
-          if (err?.code === CODES.CUT && client.closed) break;
-          this.logger.warn(
-            `Set (${label}) not delivered: ${err?.code ?? 'error'}${err?.status ? ` ${err.status}` : ''}`,
-          );
+          if (err?.code === CODES.HTTP && err.status >= 400 && err.status < 500) {
+            // The gateway answered and refused it: never sent again.
+            this.dropGuard(guard, `HTTP ${err.status}`);
+            this.logger.warn(`Set REFUSED by the gateway (${label}): HTTP ${err.status}`);
+            throw new Error(T.errors.refusedByGateway(err.status), { cause: err });
+          }
+          if (err?.code === CODES.HTTP) {
+            serverErrors += 1;
+            this.logger.warn(`Set (${label}): the gateway answers HTTP ${err.status}`);
+            if (serverErrors >= 2) break;
+          } else {
+            if (err?.code === CODES.CUT && client.closed) break;
+            this.logger.warn(`Set (${label}) not delivered: ${err?.code ?? 'error'}`);
+          }
         }
         const left = sendBy - this.monotonic();
         if (left < TIMINGS.armRetry + 50) break;
@@ -1177,7 +1303,7 @@ export class SpcApp {
       this.resending.delete(guard.area);
       if (this.guards.get(guard.area) === guard) this.scheduleFollow(guard, 0);
     }
-    // Not delivered: the guard stays, the next reads send it again.
+    // Not delivered: the guard stays (sent again only if nothing moves at the panel).
     void this.save();
     return { delivered: false, sent, error };
   }
@@ -1203,20 +1329,27 @@ export class SpcApp {
 
   // --- Guards ----------------------------------------------------------------
 
+  /** The state an area had: { mode, lastSetTime, lastUnsetTime }. */
+  static stateOf(area) {
+    return { mode: area.mode, lastSetTime: area.lastSetTime, lastUnsetTime: area.lastUnsetTime };
+  }
+
   newGuard(area, mode, mono, known) {
     const previous = this.guards.get(area);
     if (previous) this.clearFollow(previous);
+    // The reference: the area as read less than 150 s before the press, else none.
+    const fresh = known && known.mode !== null && mono - known.readMono <= TIMINGS.fresh;
     const guard = {
       area,
       mode,
       at: this.now(),
       atMono: mono,
+      eventsFrom: mono,
       resends: 0,
       delivered: false,
-      setTime: known?.lastSetTime ?? null,
+      ref: fresh ? SpcApp.stateOf(known) : null,
       overlap: this.disarmUncertain(area, mono),
       followIndex: 0,
-      restart: false,
       followTimer: undefined,
     };
     this.guards.set(area, guard);
@@ -1231,11 +1364,15 @@ export class SpcApp {
     }
   }
 
-  dropGuard(guard, why) {
+  dropGuard(guard, why, notice) {
     if (this.guards.get(guard.area) !== guard) return;
     this.clearFollow(guard);
     this.guards.delete(guard.area);
     this.logger.info(`Guard of area ${guard.area} lifted: ${why}`);
+    if (notice) {
+      this.logger.warn(notice.en);
+      this.setNotice(guard.area, notice);
+    }
     void this.save();
   }
 
@@ -1266,7 +1403,7 @@ export class SpcApp {
     const index = guard.followIndex;
     const final = index >= TIMINGS.followUps.length - 1;
     guard.followIndex = index + 1;
-    if (!client || this.authStop || this.identity === 'other') {
+    if (!client || this.identity === 'other') {
       if (!final) this.scheduleFollow(guard, index + 1);
       return;
     }
@@ -1279,7 +1416,7 @@ export class SpcApp {
     }
     if (client !== this.client || this.guards.get(guard.area) !== guard) return;
     if (area) this.observeArea(area, seq);
-    this.evaluateGuard(guard, area, { final });
+    this.evaluateGuard(guard, area, { final, fresh: Boolean(area) });
     if (
       this.guards.get(guard.area) === guard &&
       guard.followTimer === undefined &&
@@ -1289,24 +1426,31 @@ export class SpcApp {
     }
   }
 
-  /** Every guard against the areas the model holds (after a read). */
-  checkGuards() {
+  /**
+   * Every guard against the areas the model holds. `fresh` with `seq`: the
+   * read numbered `seq` just replaced them (it left after every press).
+   */
+  checkGuards({ fresh = false, seq } = {}) {
     for (const guard of [...this.guards.values()]) {
-      this.evaluateGuard(guard, this.model.areas.get(guard.area), { restart: guard.restart });
-      guard.restart = false;
+      const area = this.model.areas.get(guard.area);
+      this.evaluateGuard(guard, area, { fresh: fresh && area?.seq === seq });
     }
   }
 
   /**
-   * A guard against an area just read: lifted when the area shows it, when
-   * it expired, when the area was set then unset by someone else; sent again
-   * when it never reached the gateway, when an unset of Gladys may have
-   * landed after it, after a restart, or at the last follow-up read.
+   * A guard against an area: lifted when the area shows it, when it expired,
+   * after the last follow-up read of a set the gateway accepted (never sent
+   * again: the status says it is not visible), when something moved at the
+   * panel since the press; sent again only when it never reached the gateway
+   * (or an unset of Gladys, older, may have landed after it), on a fresh
+   * read showing the area exactly as at the press.
    */
-  evaluateGuard(guard, area, { final = false, restart = false } = {}) {
+  evaluateGuard(guard, area, { final = false, fresh = false } = {}) {
     const mono = this.monotonic();
+    const when = new Date(guard.at).toISOString().slice(11, 16);
+    const what = { area: guard.area, mode: guard.mode, when };
     if (mono - guard.atMono >= TIMINGS.guardLife) {
-      this.dropGuard(guard, 'expired');
+      this.dropGuard(guard, 'expired', guard.delivered ? undefined : T.notices.neverLeft(what));
       return;
     }
     if (!area || area.mode === null) return;
@@ -1316,31 +1460,46 @@ export class SpcApp {
       this.dropGuard(guard, `area shows ${area.mode}`);
       return;
     }
-    if (
-      !guard.overlap &&
-      area.mode === 'unset' &&
-      guard.setTime !== null &&
-      area.lastSetTime !== null &&
-      area.lastSetTime !== guard.setTime
-    ) {
-      this.dropGuard(guard, 'the area was set, then unset by someone');
+    if (guard.delivered && !guard.overlap) {
+      // Accepted by the gateway: exit time, a zone open, or cancelled at the
+      // keypad by someone inside. Never sent again.
+      if (final) this.dropGuard(guard, 'accepted, not shown', T.notices.notVisible(what));
       return;
     }
-    if (!(!guard.delivered || final || restart || guard.overlap)) return;
+    if (!fresh) return;
     if (this.resending.has(guard.area) || this.armLines.has(guard.area)) return;
-    if (!this.client || this.authStop || this.commandAuthRefused || this.identity === 'other')
+    if (!this.client || this.authStop || this.commandAuthRefused || this.identity === 'other') {
       return;
+    }
+    if (guard.overlap) {
+      // The older unset of Gladys settled: decided once on this read.
+      guard.overlap = false;
+      guard.ref = SpcApp.stateOf(area);
+      guard.eventsFrom = mono;
+    } else {
+      const ref = guard.ref;
+      const moved =
+        !ref ||
+        area.mode !== ref.mode ||
+        area.lastSetTime !== ref.lastSetTime ||
+        area.lastUnsetTime !== ref.lastUnsetTime ||
+        (this.areaEventAt.get(guard.area) ?? -Infinity) > guard.eventsFrom;
+      if (moved) {
+        this.dropGuard(
+          guard,
+          ref ? 'the area changed at the panel since the press' : 'no reference read',
+          T.notices.moved(what),
+        );
+        return;
+      }
+    }
     if (guard.resends >= LIMITS.armResends) {
-      this.logger.warn(
-        `Set of area ${guard.area} (${guard.mode}) not applied after ${guard.resends} new tries: given up`,
-      );
-      this.dropGuard(guard, 'given up');
+      this.dropGuard(guard, 'given up', T.notices.neverLeft(what));
       return;
     }
     guard.resends += 1;
-    guard.overlap = false;
     this.logger.warn(
-      `Set of area ${guard.area} (${guard.mode}) not shown: sent again (${guard.resends}/${LIMITS.armResends})`,
+      `Set of area ${guard.area} (${guard.mode}) never reached the gateway, nothing moved: sent again (${guard.resends}/${LIMITS.armResends})`,
     );
     const client = this.client;
     const generation = this.generation;
@@ -1351,14 +1510,18 @@ export class SpcApp {
       sendBy: mono + TIMINGS.sendBy,
       deadline: mono + TIMINGS.answerBy,
       label: `${MODE_NAMES[guard.mode].en} of area ${guard.area}, again`,
-    }).catch((err) => this.logger.debug(`New try ended: ${err?.message}`));
+    })
+      .then((outcome) => {
+        if (outcome.failed) this.dropGuard(guard, 'the gateway reports a failure');
+      })
+      .catch((err) => this.logger.debug(`New try ended: ${err?.message}`));
   }
 
   // --- Unset -----------------------------------------------------------------
 
   async disarm(area, received) {
     const label = `Unset of area ${area}`;
-    const ticket = { area, received, withdrawn: false, writing: false };
+    const ticket = { area, received, withdrawn: false, writing: false, sent: false };
     try {
       this.commonChecks();
       this.disarmAllowed();
@@ -1433,37 +1596,44 @@ export class SpcApp {
       throw new Refused(T.errors.tooManyDisarms(LIMITS.disarmsPerMinute));
     }
     if (mono >= received + TIMINGS.sendBy - 100) throw new Refused(T.errors.busy);
-    // The last check, synchronous, right before the request is issued.
+    // The last check, synchronous, right before the request is issued. From
+    // here the unset counts as in flight: a set pressed now may be overtaken.
     check();
     ticket.writing = true;
-    let sent = false;
+    this.disarmsInFlight.set(area, (this.disarmsInFlight.get(area) ?? 0) + 1);
     this.logger.info(`UNSETTING from Gladys: ${label} (area read: ${current.mode})`);
     try {
       await client.setMode(area, 'unset', {
         deadline: received + TIMINGS.answerBy,
         sendBy: received + TIMINGS.sendBy,
+        onRequest: (handle) => {
+          ticket.handle = handle;
+        },
+        // Checked again before a second request (after a 401 challenge).
+        check: () => !ticket.withdrawn,
         onSent: () => {
-          if (sent) return;
-          sent = true;
-          const at = this.monotonic();
-          writes.push(at);
-          this.disarmsInFlight.set(area, (this.disarmsInFlight.get(area) ?? 0) + 1);
+          if (ticket.sent) return;
+          ticket.sent = true;
+          writes.push(this.monotonic());
           // A set of this area asked before this unset: this unset, more recent, wins.
           this.liftGuardIf(area, (g) => g.atMono < received, 'an unset asked after it left');
         },
       });
     } catch (err) {
-      this.disarmSettled(area, sent);
-      if (!sent || err?.notSent) throw new Refused(T.errors.disarmNotSent(err));
+      this.disarmSettled(area, ticket.sent);
+      if (!ticket.sent || err?.notSent) {
+        if (ticket.withdrawn) throw new Refused(T.errors.disarmWithdrawn);
+        throw new Refused(T.errors.disarmNotSent(err));
+      }
       if (err?.code === CODES.FAILED) throw new Error(T.errors.refusedByPanel, { cause: err });
       if (isAuthError(err)) {
-        this.commandAuthRefused = err.code === CODES.AUTH_REFUSED;
+        if (err.code === CODES.AUTH_REFUSED) this.commandAuthRefused = true;
         throw new Error(T.errors.authRefused, { cause: err });
       }
       this.readBack(area, client);
       throw new Error(T.errors.disarmNoAnswer(err), { cause: err });
     }
-    this.disarmSettled(area, sent);
+    this.disarmSettled(area, ticket.sent);
     const confirmed = await this.confirmArea(
       area,
       received + TIMINGS.answerBy,
@@ -1477,15 +1647,15 @@ export class SpcApp {
     }
     this.readBack(area, client);
     this.logger.warn(`Unset sent, NOT confirmed yet (${label})`);
-    throw new Error(T.errors.unconfirmed(MODE_NAMES.unset.en));
+    throw new Error(T.errors.disarmUnconfirmed);
   }
 
-  /** A disarm answered (or failed): a guard waiting for it is checked at once. */
+  /** An unset answered, failed or withdrawn: a guard waiting for it is checked soon. */
   disarmSettled(area, sent) {
-    if (!sent) return;
     const left = (this.disarmsInFlight.get(area) ?? 1) - 1;
     if (left > 0) this.disarmsInFlight.set(area, left);
     else this.disarmsInFlight.delete(area);
+    if (!sent) return;
     this.disarmSettledAt.set(area, this.monotonic());
     const guard = this.guards.get(area);
     if (guard?.overlap) this.scheduleFollow(guard, 0);

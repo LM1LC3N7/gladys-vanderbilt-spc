@@ -8,6 +8,7 @@ export const LANGUAGES = Object.freeze(['fr', 'en']);
 
 // Defaults: they MUST match the `default` values of the manifest.
 export const DEFAULTS = Object.freeze({
+  allow_basic: false,
   allow_disarm: false,
   language: 'fr',
 });
@@ -98,6 +99,7 @@ export function normalizeConfig(raw = {}) {
     credentials: username && password && !credentialsError ? { username, password } : null,
     credentialsError,
     allowDisarm: bool(raw.allow_disarm, DEFAULTS.allow_disarm),
+    allowBasic: bool(raw.allow_basic, DEFAULTS.allow_basic),
     zoneKinds: zoneKinds.kinds,
     zoneKindsInvalid: zoneKinds.invalid,
     language,

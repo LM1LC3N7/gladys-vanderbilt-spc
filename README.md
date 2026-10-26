@@ -5,8 +5,9 @@
 Gateway** of Lundix (REST and websocket on your network, port 8088): each
 area becomes a Gladys device (mode, armed, alarm, and buttons full set, part
 set A, part set B, unset), each zone another (state, trouble, inhibited or
-isolated, alarm). Setting needs no option and is never held back by a read;
-unsetting is off by default. Local, no cloud. **Unofficial integration, not
+isolated, alarm). Setting needs no option and does not wait for the periodic
+reads (a part set reads its area first); a set the gateway accepted is not
+sent a second time; unsetting is off by default. Local, no cloud. **Unofficial integration, not
 affiliated with Vanderbilt nor Lundix. Never tested with a real panel yet.**
 
 User documentation: [docs/en.md](docs/en.md) · [docs/fr.md](docs/fr.md).
@@ -33,10 +34,14 @@ Gladys ⇄ SDK ⇄ src/app.js (SpcApp)
   at once (one read per 250 ms, a burst reads everything, a flood closes the
   socket); ping every 30 s, reopened 15 s to 5 min later.
 - **Set**: protective, its own connection, cuts a read silent for 1 s, tried
-  again every 250 ms until 3.5 s, confirmed by a read by 4.3 s, then a guard
-  (follow-up reads 5, 20, 60 s; 3 new sends at most; kept in `/data`).
+  again every 250 ms until 3.5 s while not delivered, confirmed by a read by
+  4.3 s; accepted by the gateway: follow-up reads 5, 20, 60 s, never sent
+  again (someone inside may have cancelled it); never delivered: sent again
+  only on a fresh read showing nothing moved at the panel, within 2 min.
 - **Unset**: option off by default, fresh read of the area and of the serial,
-  6 per area per minute, withdrawn by a later set.
+  6 per area per minute, withdrawn by a later set (even before it connects).
+- **Credentials**: only on a 401 challenge; Digest, Basic only with its
+  option, never Basic after Digest worked.
 - External ids: `panel:spc`, `area:<id>`, `zone:<id>` (the numbers of the
   panel).
 

@@ -29,7 +29,15 @@ export class GatewayClient {
    * @param {() => number} [options.monotonic]
    * @param {(size: number) => Buffer} [options.random]
    */
-  constructor({ origin, credentials = null, request = httpRequest, monotonic, random }) {
+  constructor({
+    origin,
+    credentials = null,
+    request = httpRequest,
+    monotonic,
+    random,
+    allowBasic = false,
+    pinnedScheme = null,
+  }) {
     this.origin = origin;
     this.credentials = credentials;
     this.request = request;
@@ -37,6 +45,12 @@ export class GatewayClient {
     this.random = random;
     /** The last challenge answered (Digest nonces are reused, `nc` counts). */
     this.challenge = null;
+    /** Basic sends the password readable on the network: only when the user allowed it. */
+    this.allowBasic = allowBasic;
+    /** The scheme that worked before (kept in /data): never downgraded to Basic. */
+    this.pinnedScheme = pinnedScheme;
+    /** The scheme that worked in this session (null: none asked). */
+    this.learnedScheme = null;
     /** The requests in flight: { handle, kind }. */
     this.inflight = new Set();
     this.closed = false;
@@ -67,6 +81,7 @@ export class GatewayClient {
       throw new GatewayError(CODES.CUT, 'Client closed', { notSent: true });
     }
     const promise = this.request({ origin: this.origin, maxBytes: LIMITS.maxBody, ...options });
+    options.onRequest?.(promise?.handle);
     const entry = { handle: promise?.handle, kind };
     this.inflight.add(entry);
     try {
@@ -80,7 +95,7 @@ export class GatewayClient {
    * A request with its authentication. `deadline` (monotonic): the whole
    * exchange ends by then; `sendBy`: no request leaves after it (commands).
    */
-  async call(method, path, { deadline, sendBy, onSent, kind = 'read' } = {}) {
+  async call(method, path, { deadline, sendBy, onSent, onRequest, check, kind = 'read' } = {}) {
     const headers = { 'user-agent': USER_AGENT };
     let fresh = false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -89,6 +104,9 @@ export class GatewayClient {
       const sendWithin = sendBy === undefined ? undefined : sendBy - mono;
       if (sendWithin !== undefined && sendWithin <= 0) {
         throw new GatewayError(CODES.NOT_SENT, 'No time left to send', { notSent: true });
+      }
+      if (check && !check()) {
+        throw new GatewayError(CODES.CUT, 'Withdrawn before it left', { notSent: true });
       }
       const sentWith = this.credentials && this.challenge ? this.challenge : null;
       if (sentWith) {
@@ -103,38 +121,61 @@ export class GatewayClient {
         delete headers.authorization;
       }
       const answer = await this.exchange(
-        { method, path, headers, timeout, sendWithin, onSent },
+        { method, path, headers, timeout, sendWithin, onSent, onRequest },
         kind,
       );
-      if (answer.status !== 401) return answer;
-      // The gateway asks for credentials.
-      if (!this.credentials) {
-        throw new GatewayError(CODES.AUTH_REQUIRED, 'The gateway asks for credentials', {
-          status: 401,
-        });
+      if (answer.status !== 401) {
+        if (sentWith) this.learnedScheme = sentWith.scheme;
+        return answer;
       }
-      const challenge = parseChallenge(answer.headers?.['www-authenticate']);
-      if (!challenge) {
-        throw new GatewayError(CODES.AUTH_UNSUPPORTED, 'Authentication not supported', {
-          status: 401,
-        });
-      }
-      // Refused: credentials built on a challenge of this very exchange, or
-      // Basic credentials (no nonce to expire), unless Digest says "stale".
-      const refused =
-        sentWith && (fresh || sentWith.scheme === 'basic') && !(challenge.stale && !fresh);
-      if (refused || attempt === 1) {
-        throw new GatewayError(CODES.AUTH_REFUSED, 'Credentials refused by the gateway', {
-          status: 401,
-        });
-      }
-      this.challenge = challenge;
+      this.adopt(answer.headers?.['www-authenticate'], { sentWith, fresh, attempt });
       fresh = true;
     }
     /* c8 ignore next */
     throw new GatewayError(CODES.AUTH_REFUSED, 'Credentials refused by the gateway', {
       status: 401,
     });
+  }
+
+  /**
+   * A 401 challenge of the gateway: kept for the next try, or a GatewayError.
+   * Refused: credentials built on a challenge of this very exchange, or Basic
+   * credentials (no nonce to expire), unless Digest says "stale". Basic is
+   * answered only when allowed, and never after Digest worked (a downgrade:
+   * another or a hijacked gateway would read the password).
+   */
+  adopt(header, { sentWith, fresh, attempt }) {
+    if (!this.credentials) {
+      throw new GatewayError(CODES.AUTH_REQUIRED, 'The gateway asks for credentials', {
+        status: 401,
+      });
+    }
+    const challenge = parseChallenge(header);
+    if (!challenge) {
+      throw new GatewayError(CODES.AUTH_UNSUPPORTED, 'Authentication not supported', {
+        status: 401,
+      });
+    }
+    if (challenge.scheme === 'basic') {
+      if (this.pinnedScheme === 'digest' || this.learnedScheme === 'digest') {
+        throw new GatewayError(CODES.AUTH_DOWNGRADE, 'Basic asked after Digest: nothing sent', {
+          status: 401,
+        });
+      }
+      if (!this.allowBasic) {
+        throw new GatewayError(CODES.AUTH_BASIC, 'Basic not allowed: nothing sent', {
+          status: 401,
+        });
+      }
+    }
+    const refused =
+      sentWith && (fresh || sentWith.scheme === 'basic') && !(challenge.stale && !fresh);
+    if (refused || attempt === 1) {
+      throw new GatewayError(CODES.AUTH_REFUSED, 'Credentials refused by the gateway', {
+        status: 401,
+      });
+    }
+    this.challenge = challenge;
   }
 
   /** GET a resource: its `data[resource]`, or a GatewayError. */
@@ -170,13 +211,15 @@ export class GatewayClient {
    * PUT the mode of an area. Resolves when the gateway reports a success;
    * a GatewayError else (FAILED: the panel refused it, e.g. a zone open).
    */
-  async setMode(id, mode, { deadline, sendBy, onSent }) {
+  async setMode(id, mode, { deadline, sendBy, onSent, onRequest, check }) {
     const command = COMMAND_OF_MODE[mode];
     if (!command) throw new Error(`Unknown mode ${mode}`);
     const answer = await this.call('PUT', `/spc/area/${id}/${command}`, {
       deadline,
       sendBy,
       onSent,
+      onRequest,
+      check,
       kind: 'command',
     });
     if (answer.status !== 200) {

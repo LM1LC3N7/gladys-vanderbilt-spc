@@ -56,8 +56,12 @@ scripts/cover.mjs                 the cover, plain Node
 ```
 
 Safety rules of this integration (see TODO.md "Decisions"): setting an area
-is protective (no option, no read before, never behind a read, a pause or an
-unset; tried again within its time; kept and sent again while not shown);
+is protective (no option, no read before, not behind a read, a pause, a
+refusal kept or an unset; tried again within its time while not delivered);
+a set the gateway accepted is never sent again (an occupant may have
+cancelled it); one never delivered only on a fresh read showing nothing
+moved, within 2 minutes; the credentials go in Basic only with its option and
+never after Digest worked;
 unsetting is off by default (option read again right before the write),
 decided on a fresh read, needs the panel identity read in the session;
 commands are push buttons, never switches; a command that may have left is

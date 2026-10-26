@@ -43,7 +43,7 @@ test('challenges: Digest before Basic, unknown algorithms and auth-int only refu
   );
 });
 
-function client(fake, credentials) {
+function client(fake, credentials, options = {}) {
   const { clock, timers } = createFakeClock(0);
   fake.timers = timers;
   fake.clock = clock;
@@ -53,6 +53,7 @@ function client(fake, credentials) {
     request: fake.request,
     monotonic: () => clock.now,
     random: (n) => Buffer.alloc(n, 1),
+    ...options,
   });
 }
 
@@ -88,11 +89,40 @@ test('refused: credentials built on a fresh challenge, or Basic credentials', as
   });
   assert.equal(digest.requests.length, 2);
   const basic = createFakeGateway({ auth: { scheme: 'basic', username: 'u', password: 'p' } });
-  const c = client(basic, { username: 'u', password: 'p' });
+  const c = client(basic, { username: 'u', password: 'p' }, { allowBasic: true });
   await c.readAreas();
   basic.auth.password = 'changed';
   await assert.rejects(c.readAreas(), { code: 'auth_refused' });
   assert.equal(basic.requests.length, 3, 'a Basic refusal is final at once');
+});
+
+test('Basic: never answered unless allowed; never after Digest worked (no downgrade)', async () => {
+  const basic = createFakeGateway({ auth: { scheme: 'basic', username: 'u', password: 'p' } });
+  await assert.rejects(client(basic, { username: 'u', password: 'p' }).readAreas(), {
+    code: 'auth_basic',
+  });
+  assert.deepEqual(
+    basic.requests.map((r) => r.authorization),
+    [false],
+    'the password never sent',
+  );
+  const fake = createFakeGateway({ auth: { scheme: 'digest', username: 'u', password: 'p' } });
+  const c = client(fake, { username: 'u', password: 'p' }, { allowBasic: true });
+  await c.readAreas();
+  assert.equal(c.learnedScheme, 'digest');
+  fake.auth.scheme = 'basic';
+  const before = fake.requests.length;
+  await assert.rejects(c.readAreas(), { code: 'auth_downgrade' });
+  assert.equal(fake.requests.length, before + 1, 'nothing sent in Basic');
+  const pinned = client(
+    fake,
+    { username: 'u', password: 'p' },
+    {
+      allowBasic: true,
+      pinnedScheme: 'digest',
+    },
+  );
+  await assert.rejects(pinned.readAreas(), { code: 'auth_downgrade' });
 });
 
 test('a command answered after a challenge: the PUT is sent again once', async () => {

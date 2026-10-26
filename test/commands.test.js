@@ -56,7 +56,7 @@ test('set: tried again every 250 ms while the request does not reach the gateway
   assert.equal(fake.areas.get('1').mode, '3');
 });
 
-test('set never delivered in its time: said, kept, sent again by the next read', async () => {
+test('set never delivered: sent again by a fresh read when nothing moved at the panel', async () => {
   const fake = createFakeGateway();
   const { pressFor, wait, store } = await setup({ fake });
   fake.behaviors.push({ method: 'PUT', action: 'down', times: 20 });
@@ -66,10 +66,54 @@ test('set never delivered in its time: said, kept, sent again by the next read',
   assert.equal(store.data.guards.length, 1);
   assert.equal(fake.areas.get('1').mode, '0');
   fake.behaviors.length = 0;
-  await wait(MINUTE);
-  assert.equal(fake.areas.get('1').mode, '3', 'sent again by the read');
+  await wait(20 * SECOND);
+  assert.equal(fake.areas.get('1').mode, '3', 'sent again by the follow-up read');
   await wait(10 * SECOND);
   assert.equal(store.data.guards.length, 0);
+});
+
+test('set never delivered, the area unset at the keypad meanwhile: never sent again', async () => {
+  const fake = createFakeGateway();
+  fake.setMode('1', '3');
+  const { pressFor, wait, gladys } = await setup({ fake });
+  fake.setMode('1', '0');
+  fake.behaviors.push({ method: 'PUT', action: 'down', times: 20 });
+  // The reference is the last read (full set): the area moved since.
+  await pressFor('1', 'arm-full');
+  const tries = puts(fake).length;
+  fake.behaviors.length = 0;
+  await wait(5 * MINUTE);
+  assert.equal(puts(fake).length, tries);
+  assert.equal(fake.areas.get('1').mode, '0');
+  assert.match(gladys.fake.connectionStatus.message.en, /changed at the panel since/);
+});
+
+test('set never delivered, an event of the panel since the press: never sent again', async () => {
+  const fake = createFakeGateway();
+  const { pressFor, wait } = await setup({ fake });
+  fake.behaviors.push({ method: 'PUT', action: 'down', times: 20 });
+  await pressFor('1', 'arm-full');
+  const tries = puts(fake).length;
+  fake.push('OP', '9998');
+  fake.behaviors.length = 0;
+  await wait(5 * MINUTE);
+  assert.equal(puts(fake).length, tries);
+  assert.equal(fake.areas.get('1').mode, '0');
+});
+
+test('set never delivered, the gateway back 4 min later: not sent, the status says to set again', async () => {
+  const fake = createFakeGateway();
+  const { pressFor, wait, gladys } = await setup({ fake });
+  fake.behaviors.push({ method: 'PUT', action: 'down' });
+  fake.behaviors.push({ method: 'GET', action: 'down' });
+  await pressFor('1', 'arm-full');
+  const tries = puts(fake).length;
+  await wait(4 * MINUTE);
+  fake.behaviors.length = 0;
+  await wait(5 * MINUTE);
+  assert.equal(puts(fake).length, tries);
+  assert.equal(fake.areas.get('1').mode, '0');
+  assert.match(gladys.fake.connectionStatus.message.en, /never reached the gateway: set it again/);
 });
 
 test('set accepted, applied 30 s later (exit time): "sent, not yet shown", no new send', async () => {
@@ -83,16 +127,34 @@ test('set accepted, applied 30 s later (exit time): "sent, not yet shown", no ne
   assert.equal(gladys.fake.lastState(featureId('area', '1', 'mode')), 'Totale');
 });
 
-test('set accepted but never applied: sent again at the 60 s read, 3 times at most', async () => {
+test('set accepted but never shown (a zone open): never sent again, said in the status', async () => {
   const fake = createFakeGateway();
-  const { pressFor, wait, logs } = await setup({ fake });
-  fake.applyDelay = 60 * MINUTE;
+  const { pressFor, wait, gladys } = await setup({ fake });
+  fake.ignoreCommands = true;
   await pressFor('1', 'arm-full');
-  await wait(9 * MINUTE);
-  assert.equal(puts(fake).length, 4, `${puts(fake)}`);
-  assert.ok(logs.some((l) => /given up/.test(l)));
-  await wait(5 * MINUTE);
-  assert.equal(puts(fake).length, 4);
+  // The occupant closes the door 30 s later: the area must not set itself.
+  await wait(30 * SECOND);
+  fake.ignoreCommands = false;
+  await wait(10 * MINUTE);
+  assert.equal(puts(fake).length, 1);
+  assert.equal(fake.areas.get('1').mode, '0');
+  assert.match(
+    gladys.fake.connectionStatus.message.en,
+    /accepted by the gateway but the area does not show it 60 s later.*not sent again/,
+  );
+});
+
+test('exit time cancelled at the keypad by the occupant: never set again', async () => {
+  const fake = createFakeGateway();
+  const { pressFor, wait } = await setup({ fake });
+  fake.applyDelay = 45 * SECOND;
+  await pressFor('1', 'arm-full');
+  await wait(10 * SECOND);
+  fake.keypadUnset('1');
+  fake.push('OP', '1');
+  await wait(10 * MINUTE);
+  assert.equal(puts(fake).length, 1);
+  assert.equal(fake.areas.get('1').mode, '0');
 });
 
 test('set, then unset by someone at the keypad: never set again by the guard', async () => {
@@ -246,10 +308,10 @@ test('a set while an unset of Gladys is in flight: sent again once the unset lan
 
 test('an unset asked after a set lifts its guard once it left; still writes while a set may apply', async () => {
   const fake = createFakeGateway();
-  const { pressFor, wait, store } = await setup({ fake, config: ALLOW });
+  const { pressFor, wait, store, app } = await setup({ fake, config: ALLOW });
   fake.applyDelay = 30 * SECOND;
   await pressFor('1', 'arm-full');
-  assert.equal(store.data.guards.length, 1);
+  assert.equal(app.guards.size, 1);
   // The area still reads unset, but the set may apply: the unset is written.
   const answer = await pressFor('1', 'disarm');
   assert.ok(
@@ -289,6 +351,84 @@ test('a set cuts a read silent for 1 s', async () => {
   assert.ok(logs.some((l) => /1 silent read\(s\) cut/.test(l)));
 });
 
+test('the gateway answers HTTP 400: one request, the exact reason, never sent again', async () => {
+  const fake = createFakeGateway();
+  const { pressFor, wait } = await setup({ fake });
+  fake.behaviors.push({ method: 'PUT', action: 'status', status: 400 });
+  const answer = await pressFor('1', 'arm-full');
+  assert.match(answer.error, /refused by the gateway \(HTTP 400\)/);
+  await wait(5 * MINUTE);
+  assert.equal(puts(fake).length, 1);
+});
+
+test('the gateway answers HTTP 500: two requests at most, then "no valid answer"', async () => {
+  const fake = createFakeGateway();
+  const { pressFor } = await setup({ fake });
+  fake.behaviors.push({ method: 'PUT', action: 'status', status: 500 });
+  const answer = await pressFor('1', 'arm-full');
+  assert.match(answer.error, /no valid answer from the gateway \(HTTP error 500\)/);
+  assert.equal(puts(fake).length, 2);
+});
+
+test('"failed" on an area already fully set: success', async () => {
+  const fake = createFakeGateway();
+  fake.setMode('1', '3');
+  const { pressFor } = await setup({ fake });
+  fake.refuseCommands = true;
+  assert.deepEqual(await pressFor('1', 'arm-full'), { success: true });
+});
+
+test('an unset decided but not yet connected is cut by a set pressed meanwhile', async () => {
+  const fake = createFakeGateway();
+  fake.setMode('1', '3');
+  const { press, wait } = await setup({ fake, config: ALLOW });
+  // The connection of the unset takes 1 s (a SYN refused once by a busy gateway).
+  fake.behaviors.push({ method: 'PUT', path: '/spc/area/1/unset', connectDelay: 1000, times: 1 });
+  const unset = press('1', 'disarm');
+  await wait(300);
+  const set = press('1', 'arm-full');
+  await wait(10 * SECOND);
+  assert.match((await unset).error, /^Withdrawn: a set command of this area was asked after it/);
+  assert.equal((await set).success, true);
+  assert.equal(fake.requests.filter((r) => r.path.endsWith('/unset') && r.sent).length, 0);
+  await wait(MINUTE);
+  assert.equal(fake.areas.get('1').mode, '3');
+});
+
+test('a refusal of the credentials kept never blocks a set: one try per press, a success lifts it', async () => {
+  const fake = createFakeGateway({ auth: { scheme: 'digest', username: 'u', password: 'p' } });
+  const store = memoryStore();
+  const first = await setup({ fake, store, config: { username: 'u', password: 'p' } });
+  fake.auth.password = 'other';
+  await first.wait(MINUTE);
+  assert.ok(store.data.refused);
+  // The gateway takes the password again: a press goes, and lifts the refusal.
+  fake.auth.password = 'p';
+  fake.requests.length = 0;
+  const again = await setup({
+    fake,
+    store,
+    now: T0 + 10 * MINUTE,
+    config: { username: 'u', password: 'p' },
+  });
+  assert.equal(fake.requests.length, 0, 'no read by itself');
+  assert.deepEqual(await again.pressFor('1', 'arm-full'), { success: true });
+  assert.equal(store.data.refused, null);
+  await again.wait(MINUTE);
+  assert.equal(again.gladys.fake.connectionStatus.connected, true);
+  // Still refused: one try (the challenge and the answer), the true reason.
+  fake.auth.password = 'changed';
+  fake.requests.length = 0;
+  const refused = await again.pressFor('3', 'arm-full');
+  assert.match(refused.error, /refuses the user name or the password/);
+  assert.ok(fake.count('PUT', /set$/) <= 2);
+});
+
+test('a set before the configuration of Gladys is read: the true reason', async () => {
+  const { app } = await setup({ connect: false });
+  await assert.rejects(app.arm('1', 'full_set', 0), /configuration of Gladys is not read yet/);
+});
+
 test('the panel refuses a set (a zone open): said, never sent again', async () => {
   const fake = createFakeGateway();
   const { pressFor, wait, store } = await setup({ fake });
@@ -300,33 +440,43 @@ test('the panel refuses a set (a zone open): said, never sent again', async () =
   assert.equal(store.data.guards.length, 0);
 });
 
-test('a set kept in /data is sent again after a restart when the area does not show it', async () => {
+test('after a restart: a set that never left is sent only if the area is as at the press', async () => {
+  const ref = { mode: 'unset', lastSetTime: 1485759851, lastUnsetTime: 1485800564 };
   const store = memoryStore({
     panel: SERIAL,
     lastAttemptAt: T0 - 2 * MINUTE,
     guards: [
-      {
-        area: '1',
-        mode: 'full_set',
-        at: T0 - 30 * SECOND,
-        resends: 0,
-        delivered: false,
-        setTime: 1485759851,
-        overlap: false,
-      },
-      // Too old: dropped.
-      { area: '3', mode: 'full_set', at: T0 - 11 * MINUTE, resends: 0, delivered: false },
+      { area: '1', mode: 'full_set', at: T0 - 30 * SECOND, resends: 0, delivered: false, ref },
+      // Accepted by the gateway before the restart: never sent again.
+      { area: '3', mode: 'full_set', at: T0 - 20 * SECOND, resends: 0, delivered: true, ref },
     ],
   });
   const fake = createFakeGateway();
   await setup({ fake, store });
-  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
     puts(fake).map((p) => p.split('@')[0]),
     ['set'],
   );
   assert.equal(fake.areas.get('1').mode, '3');
   assert.equal(fake.areas.get('3').mode, '0');
+  // The area unset at the keypad while the container restarted: not sent.
+  const moved = memoryStore({
+    panel: SERIAL,
+    guards: [{ area: '1', mode: 'full_set', at: T0 - 30 * SECOND, resends: 0, ref }],
+  });
+  const other = createFakeGateway();
+  other.areas.get('1').last_unset_time = '1485800999';
+  const again = await setup({ fake: other, store: moved });
+  await again.wait(5 * MINUTE);
+  assert.equal(puts(other).length, 0);
+  // Older than 2 minutes: dropped.
+  const old = memoryStore({
+    panel: SERIAL,
+    guards: [{ area: '1', mode: 'full_set', at: T0 - 3 * MINUTE, resends: 0, ref }],
+  });
+  const third = createFakeGateway();
+  await setup({ fake: third, store: old });
+  assert.equal(puts(third).length, 0);
 });
 
 test('a scene sets 5 areas with a slow gateway (800 ms per answer): all 5 set in time', async () => {

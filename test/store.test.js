@@ -21,10 +21,19 @@ test('normalized: unknown keys dropped, times capped to now, old guards dropped'
         panel: 'DEADBEEF',
         lastAttemptAt: NOW + 1e9,
         extra: 1,
+        authScheme: 'digest',
         guards: [
-          { area: '1', mode: 'full_set', at: NOW + 5000, resends: 99, delivered: true },
+          {
+            area: '1',
+            mode: 'full_set',
+            at: NOW - 5000,
+            resends: 99,
+            ref: { mode: 'unset', lastSetTime: 5, lastUnsetTime: 'x' },
+          },
           { area: '2', mode: 'unset', at: NOW },
-          { area: '3', mode: 'part_set_a', at: NOW - 11 * 60_000 },
+          { area: '3', mode: 'part_set_a', at: NOW - 3 * 60_000 },
+          { area: '4', mode: 'full_set', at: NOW, delivered: true },
+          { area: '5', mode: 'full_set', at: NOW + 5000 },
           { area: 'x', mode: 'full_set', at: NOW },
         ],
       }),
@@ -34,12 +43,23 @@ test('normalized: unknown keys dropped, times capped to now, old guards dropped'
   assert.equal(memory.panel, 'DEADBEEF');
   assert.equal(memory.lastAttemptAt, NOW);
   assert.deepEqual([...memory.guards.keys()], ['1']);
-  assert.equal(memory.guards.get('1').at, NOW);
+  assert.equal(memory.authScheme, 'digest');
   assert.equal(memory.guards.get('1').resends, 3);
+  assert.deepEqual(memory.guards.get('1').ref, {
+    mode: 'unset',
+    lastSetTime: 5,
+    lastUnsetTime: null,
+  });
   assert.equal(normalizeMemory({ panel: 'a b' }, NOW).panel, null);
   assert.equal(normalizeMemory(JSON.parse('{"__proto__":{"panel":"X"}}'), NOW).panel, null);
   const round = serializeMemory(memory);
-  assert.deepEqual(Object.keys(round), ['panel', 'lastAttemptAt', 'refused', 'guards']);
+  assert.deepEqual(Object.keys(round), [
+    'panel',
+    'lastAttemptAt',
+    'refused',
+    'authScheme',
+    'guards',
+  ]);
 });
 
 test('a refused password is kept as an 8-bit marker: never found back by brute force', () => {
