@@ -127,8 +127,10 @@ secteur est sur le réseau et pas encore répondue peut être dépassée par ell
 Une fois cette mise hors service répondue, le secteur lu juste après devient
 la référence : la mise en service n'est renvoyée qu'une fois, et seulement si
 une lecture fraîche plus tard le montre toujours exactement ainsi (mode,
-heures de dernière mise en et hors service) sans événement de mise en ou hors
-service de la centrale plus d'1 s après cette réponse. Une mise hors service
+heures de dernière mise en et hors service) et si, depuis le départ de cette
+mise hors service, la centrale n'a signalé qu'une mise hors service (celle de
+Gladys) et une mise en service (celle-ci) : tout autre événement, une action
+au clavier même dans la même seconde, annule le renvoi. Une mise hors service
 répondue avant l'appui ne peut pas la dépasser : rien n'est alors renvoyé.
 
 Une **partielle** n'est pas envoyée sur une totale lue à cet instant (rien

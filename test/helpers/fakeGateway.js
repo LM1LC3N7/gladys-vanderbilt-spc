@@ -162,6 +162,13 @@ export function createFakeGateway({
         fake.pendingApply.delete(m[1]);
         fake.setMode(m[1], MODE_CODE[m[2]]);
       };
+      if (m[2] === 'unset') {
+        // An unset cancels an exit time running, at once.
+        fake.timers.clearTimeout(fake.pendingApply.get(m[1]));
+        fake.pendingApply.delete(m[1]);
+        apply();
+        return { status: 200, headers: {}, body: Buffer.from('{"status":"success"}') };
+      }
       if (fake.applyDelay > 0) {
         // The exit time: the area reads as before until it ends.
         fake.timers.clearTimeout(fake.pendingApply.get(m[1]));

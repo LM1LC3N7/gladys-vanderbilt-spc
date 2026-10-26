@@ -324,7 +324,7 @@ export const T = {
       `Sent, no valid answer from the gateway (${reasonOf(err).en}): area read again 5, 20 and 60 s later; sent again within 2 minutes only if nothing changed at the panel`,
     armReplaced: 'Not sent: an unset command of this area, asked after it, left first',
     unconfirmedOverlap: (what) =>
-      `Sent and accepted by the gateway, not yet shown by the area (${what}); an older unset of Gladys was still in flight: sent once more only if it lands after this set and nothing changes at the panel`,
+      `Sent and accepted by the gateway, not yet shown by the area (${what}); an older unset of Gladys was still in flight: sent once more if, after that unset is answered, the area does not show it and nothing else moved at the panel`,
     unconfirmed: (what) =>
       `Sent and accepted by the gateway, not yet shown by the area (${what}): read again 5, 20 and 60 s later, not sent again`,
     disarmUnconfirmed:

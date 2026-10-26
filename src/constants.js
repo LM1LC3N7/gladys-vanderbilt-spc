@@ -102,6 +102,8 @@ export const SIA = Object.freeze({
   VERIFIED_ALARM: 'BV',
   /** Someone set or unset at the panel: a set of Gladys never sent again after it. */
   MOVES: new Set(['CG', 'NL', 'OG', 'CL', 'OP']),
+  /** Of those, the unsets (the others are sets). */
+  UNSETS: new Set(['OG', 'OP']),
 });
 
 /** Gladys core values (server/utils/constants.js). */

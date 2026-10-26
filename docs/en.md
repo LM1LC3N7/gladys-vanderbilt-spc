@@ -112,8 +112,10 @@ A set pressed while an unset of Gladys of the same area is on the wire and
 not answered yet may be overtaken by it. Once that unset is answered, the
 area as read right after it becomes the reference: the set is sent again
 once only if a later fresh read shows the area still exactly so (mode, last
-set and unset times) and no set or unset event of the panel came more than
-1 s after that answer. An unset answered before the set was pressed cannot
+set and unset times) and, since that unset left, the panel reported no set
+or unset event other than one unset (that of Gladys) and one set (that of
+this set): any other one, a keypad action even within the same second,
+cancels the new send. An unset answered before the set was pressed cannot
 overtake it: nothing is sent again then.
 
 A **part set** is not sent over a full set read at that moment (nothing is

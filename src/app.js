@@ -100,6 +100,10 @@ export class SpcApp {
     this.notices = new Map();
     /** The last set or unset event of the panel by area (monotonic). */
     this.areaEventAt = new Map();
+    /** The last set / unset events of the panel by area: [{ at, kind }] (monotonic). */
+    this.areaEvents = new Map();
+    /** When the last unset of Gladys of an area left (monotonic). */
+    this.disarmSentAt = new Map();
     /** The last "Test the connection" read (monotonic). */
     this.lastForcedAt = undefined;
     this.reset();
@@ -899,7 +903,14 @@ export class SpcApp {
     if (SIA.MOVES.has(event.code)) {
       // Someone set or unset at the panel (CL / OP name a user: every area).
       const areas = SIA.ALL_AREAS.has(event.code) ? [...this.model.areas.keys()] : [event.address];
-      for (const id of areas) if (id !== null) this.areaEventAt.set(id, mono);
+      const kind = SIA.UNSETS.has(event.code) ? 'unset' : 'set';
+      for (const id of areas) {
+        if (id === null) continue;
+        this.areaEventAt.set(id, mono);
+        const list = this.areaEvents.get(id) ?? [];
+        list.push({ at: mono, kind });
+        this.areaEvents.set(id, list.slice(-20));
+      }
     }
     if (SIA.ALL_AREAS.has(event.code)) {
       for (const id of this.model.areas.keys()) this.markDirty('area', id);
@@ -1099,7 +1110,7 @@ export class SpcApp {
   /** `notice`: { kind, mode } of T.notices, dated now; null clears it. */
   setNotice(area, notice) {
     this.notices.delete(area);
-    if (notice) this.notices.set(area, { ...notice, area, at: this.monotonic() });
+    if (notice) this.notices.set(area, { ...notice, area, at: notice.since ?? this.monotonic() });
     void this.refreshStatus();
   }
 
@@ -1275,6 +1286,7 @@ export class SpcApp {
             sendBy,
             onSent: () => {
               sent = true;
+              guard.sentAt ??= this.monotonic();
               onWritten?.();
             },
           });
@@ -1391,9 +1403,34 @@ export class SpcApp {
     this.logger.info(`Guard of area ${guard.area} lifted: ${why}`);
     if (notice) {
       this.logger.warn(T.notices[notice]({ area: guard.area, mode: guard.mode, ago: 0 }).en);
-      this.setNotice(guard.area, { kind: notice, mode: guard.mode });
+      // Its age counts from the press.
+      this.setNotice(guard.area, { kind: notice, mode: guard.mode, since: guard.atMono });
     }
     void this.save();
+  }
+
+  /**
+   * A set or unset event of the panel since the guard counts from. For an
+   * overlap set, the first unset event (that of the older unset of Gladys)
+   * and the first set event after this set left are its own: not counted.
+   */
+  movedByEvents(guard) {
+    const events = (this.areaEvents.get(guard.area) ?? []).filter((e) => e.at > guard.eventsFrom);
+    if (!guard.overlapEvents) return events.length > 0;
+    let ownUnset = false;
+    let ownSet = false;
+    for (const event of events) {
+      if (event.kind === 'unset' && !ownUnset) ownUnset = true;
+      else if (
+        event.kind === 'set' &&
+        !ownSet &&
+        guard.sentAt !== undefined &&
+        event.at >= guard.sentAt
+      ) {
+        ownSet = true;
+      } else return true;
+    }
+    return false;
   }
 
   /** A set marked overlap whose older unset is not answered, or its reference not read yet. */
@@ -1422,7 +1459,11 @@ export class SpcApp {
     const read = this.model.areas.get(area);
     guard.ref =
       read && read.mode !== null && read.readMono >= settledAt ? SpcApp.stateOf(read) : null;
-    guard.eventsFrom = settledAt + 1_000;
+    // The events count from the moment that unset left: its own unset event
+    // and the set event of this set are expected once each, any other one
+    // (a keypad action, even in the same second) drops the new send.
+    guard.eventsFrom = this.disarmSentAt.get(area) ?? settledAt;
+    guard.overlapEvents = true;
     this.scheduleFollow(guard, 0);
   }
 
@@ -1539,7 +1580,7 @@ export class SpcApp {
       area.mode !== ref.mode ||
       area.lastSetTime !== ref.lastSetTime ||
       area.lastUnsetTime !== ref.lastUnsetTime ||
-      (this.areaEventAt.get(guard.area) ?? -Infinity) > guard.eventsFrom;
+      this.movedByEvents(guard);
     if (moved) {
       this.dropGuard(
         guard,
@@ -1672,6 +1713,7 @@ export class SpcApp {
         onSent: () => {
           if (ticket.sent) return;
           ticket.sent = true;
+          this.disarmSentAt.set(area, this.monotonic());
           writes.push(this.monotonic());
           // A set of this area asked before this unset: this unset, more recent, wins.
           this.liftGuardIf(area, (g) => g.atMono < received, 'an unset asked after it left');

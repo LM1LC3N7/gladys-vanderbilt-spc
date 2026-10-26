@@ -53,8 +53,9 @@ up to date at the end of every milestone.
   decides one resend.
 - **Review 2**: `overlap` only when an unset of Gladys is in flight (decided,
   not answered) at the press; its reference is the area read after that
-  unset's answer, with the same checks (times, SIA events more than 1 s after
-  the answer); no reference, no resend. A fresh read must have started after
+  unset's answer, with the same checks (times, and SIA events since that
+  unset left: only its own unset event and this set's own set event are
+  ignored, once each; review 3); no reference, no resend. A fresh read must have started after
   the press. With no times from the gateway, a resend needs the websocket
   live since the press. "Test the connection" forgets the Digest memory only
   after a downgrade stop. Status notices: "N min ago", dropped after 1 h or

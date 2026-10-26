@@ -618,3 +618,49 @@ test('no time on the gateway and no live events: a set never delivered is not se
   await wait(3 * MINUTE);
   assert.equal(puts(fake).length, tries);
 });
+
+test('S8: overlap, a keypad action in the same second as the older unset: never sent again', async () => {
+  const fake = createFakeGateway();
+  fake.setMode('1', '3');
+  const { press, wait, clock, logs } = await setup({ fake, config: ALLOW });
+  // The unset of Gladys is applied at its answer, 1.5 s after it left: after the set.
+  fake.behaviors.push({ method: 'PUT', path: '/spc/area/1/unset', delay: 1500, times: 1 });
+  fake.applyDelay = 45 * SECOND;
+  const start = clock.now;
+  const unset = press('1', 'disarm');
+  await wait(400);
+  const set = press('1', 'arm-full');
+  await wait(1200);
+  fake.push('OG', '1'); // the event of the unset of Gladys
+  await wait(200);
+  // Someone at the keypad, 0.2 s later, in the same panel second: the times
+  // do not move, only its event tells.
+  assert.equal(Math.floor((clock.now - start) / 1000), 1, 'the same panel second as the unset');
+  fake.keypadUnset('1');
+  fake.push('OP', '9998');
+  await unset;
+  await set;
+  await wait(3 * MINUTE);
+  assert.ok(clock.now > start, logs.join('\n'));
+  assert.equal(puts(fake).filter((p) => p.startsWith('set@')).length, 1, `${puts(fake)}`);
+  assert.equal(fake.areas.get('1').mode, '0');
+});
+
+test('overlap: its own set and unset events alone do not cancel the one new send', async () => {
+  const fake = createFakeGateway();
+  fake.setMode('1', '3');
+  const { press, wait } = await setup({ fake, config: ALLOW });
+  fake.behaviors.push({ method: 'PUT', path: '/spc/area/1/unset', delay: 1500, times: 1 });
+  const unset = press('1', 'disarm');
+  await wait(400);
+  const set = press('1', 'arm-full');
+  await wait(200);
+  fake.push('CG', '1'); // the set applied first
+  await wait(1000);
+  fake.push('OG', '1'); // then the older unset of Gladys
+  await unset;
+  await set;
+  await wait(MINUTE);
+  assert.equal(puts(fake).filter((p) => p.startsWith('set@')).length, 2);
+  assert.equal(fake.areas.get('1').mode, '3');
+});
