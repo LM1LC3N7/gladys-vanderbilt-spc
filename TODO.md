@@ -82,6 +82,11 @@ up to date at the end of every milestone.
 - The size of `/spc/zone` with 512 zones (1 MB cap).
 - Whether `PUT set` on an area already fully set is a success or a failure.
 - The serial number in `/spc/panel` (`sn`) on every firmware.
+- Whether the gateway reports its own unset (the unset sent by the
+  integration) as an event: the one `overlap` resend ignores exactly that
+  event and the set's own; if the gateway does not report it, a keypad action
+  in the same second as the integration's unset is not seen and the set is
+  resent once (review 3, scenario s8).
 
 ## Decisions
 
