@@ -101,7 +101,9 @@ nouvel essai), puis le secteur est relu jusqu'à 4,3 s :
 - le secteur montre le mode : c'est fait ;
 - la passerelle l'a acceptée mais le secteur ne la montre pas encore :
   Gladys répond « envoyée et acceptée, pas encore visible », et le secteur est
-  relu 5, 20 et 60 s plus tard. **Elle n'est pas envoyée une deuxième fois** :
+  relu 5, 20 et 60 s plus tard. **Elle n'est pas envoyée une deuxième fois**
+  (une exception plus bas : une mise hors service plus ancienne de Gladys
+  encore en vol) :
   la centrale peut être dans sa temporisation de sortie, une zone peut être
   ouverte, ou quelqu'un à l'intérieur peut l'avoir annulée au clavier. Si le
   secteur ne la montre toujours pas après 60 s, le statut de l'intégration le
@@ -115,14 +117,19 @@ nouvel essai), puis le secteur est relu jusqu'à 4,3 s :
   seulement sur une lecture fraîche du secteur qui le montre exactement tel
   qu'il était lu avant l'appui (mode, heure de dernière mise en service,
   heure de dernière mise hors service ; cette lecture datant de moins de
-  150 s avant l'appui) et sans événement de mise en ou hors service de la
-  centrale depuis l'appui. Sinon elle est abandonnée et le statut dit de la
-  refaire.
+  150 s avant l'appui, la lecture fraîche partie après l'appui) et sans
+  événement de mise en ou hors service de la centrale depuis l'appui. Si la
+  passerelle ne donne aucune heure, le websocket doit être ouvert depuis
+  l'appui. Sinon elle est abandonnée et le statut le dit.
 
 Une mise en service appuyée alors qu'une mise hors service de Gladys du même
-secteur est déjà sur le réseau peut être dépassée par elle : une fois cette
-mise hors service répondue, le secteur est relu et la mise en service est
-renvoyée une fois si le secteur ne la montre pas.
+secteur est sur le réseau et pas encore répondue peut être dépassée par elle.
+Une fois cette mise hors service répondue, le secteur lu juste après devient
+la référence : la mise en service n'est renvoyée qu'une fois, et seulement si
+une lecture fraîche plus tard le montre toujours exactement ainsi (mode,
+heures de dernière mise en et hors service) sans événement de mise en ou hors
+service de la centrale plus d'1 s après cette réponse. Une mise hors service
+répondue avant l'appui ne peut pas la dépasser : rien n'est alors renvoyé.
 
 Une **partielle** n'est pas envoyée sur une totale lue à cet instant (rien
 n'est envoyé : le secteur reste en totale) ni sur l'autre partielle
@@ -192,10 +199,12 @@ remplacée), appuyez sur **Utiliser la centrale qui répond**.
 - Le statut de l'intégration dit si la passerelle répond, le nombre de
   secteurs et de zones, si les événements arrivent en direct (et le statut
   HTTP du websocket quand il est refusé), l'usage de Basic, et ce qu'est
-  devenue une mise en service non visible.
+  devenue une mise en service non visible (1 heure au plus, jusqu'à ce que
+  le secteur soit mis en service).
 - **Tester la connexion** : relit la configuration, fait un essai malgré des
   identifiants refusés (au plus toutes les 10 s), oublie que Digest a réussi
-  (Basic demande toujours son option), lit la passerelle quand le rythme le
+  seulement après un arrêt sur une demande de Basic qui l'a suivi (Basic
+  demande toujours son option), lit la passerelle quand le rythme le
   permet (pas plus d'une fois par minute), puis rend compte.
 - Les lectures en échec sont réessayées toutes les minutes au début, puis
   à 2, 4 et 5 minutes d’écart ; le websocket 15 s à 5 min plus tard. Un

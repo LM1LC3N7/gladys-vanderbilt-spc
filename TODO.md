@@ -51,6 +51,14 @@ up to date at the end of every milestone.
   not up (the request handle is aborted: nothing leaves) and is marked
   `overlap` when one is on the wire: once that unset is answered, a fresh read
   decides one resend.
+- **Review 2**: `overlap` only when an unset of Gladys is in flight (decided,
+  not answered) at the press; its reference is the area read after that
+  unset's answer, with the same checks (times, SIA events more than 1 s after
+  the answer); no reference, no resend. A fresh read must have started after
+  the press. With no times from the gateway, a resend needs the websocket
+  live since the press. "Test the connection" forgets the Digest memory only
+  after a downgrade stop. Status notices: "N min ago", dropped after 1 h or
+  when the area is set.
 - **I3**: a 4xx answer to a set is a refusal (one request, the exact reason);
   5xx: one more try; `failed`: the area is read, shown = success.
 - **I4**: Basic only with the `allow_basic` option (off by default), with a

@@ -265,17 +265,21 @@ export const T = {
     }),
   },
   notices: {
-    notVisible: ({ area, mode, when }) => ({
-      en: `The ${MODE_NAMES[mode].en} of area ${area} asked at ${when} UTC was accepted by the gateway but the area does not show it 60 s later (exit time, a zone open, or cancelled at the keypad): not sent again.`,
-      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée à ${when} UTC a été acceptée par la passerelle mais le secteur ne la montre pas 60 s plus tard (temporisation de sortie, zone ouverte, ou annulée au clavier) : pas renvoyée.`,
+    notVisible: ({ area, mode, ago }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked ${minutes(ago)} min ago was accepted by the gateway but the area did not show it 60 s later (exit time, a zone open, or cancelled at the keypad): not sent again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée il y a ${minutes(ago)} min a été acceptée par la passerelle mais le secteur ne la montrait pas 60 s plus tard (temporisation de sortie, zone ouverte, ou annulée au clavier) : pas renvoyée.`,
     }),
-    neverLeft: ({ area, mode, when }) => ({
-      en: `The ${MODE_NAMES[mode].en} of area ${area} asked at ${when} UTC never reached the gateway: set it again.`,
-      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée à ${when} UTC n’a jamais atteint la passerelle : refaites-la.`,
+    neverLeft: ({ area, mode, ago }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked ${minutes(ago)} min ago never reached the gateway: set it again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée il y a ${minutes(ago)} min n’a jamais atteint la passerelle : refaites-la.`,
     }),
-    moved: ({ area, mode, when }) => ({
-      en: `The ${MODE_NAMES[mode].en} of area ${area} asked at ${when} UTC did not reach the gateway, and the area changed at the panel since (or was not read before): not sent again.`,
-      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée à ${when} UTC n’a pas atteint la passerelle, et le secteur a changé à la centrale depuis (ou n’avait pas été lu avant) : pas renvoyée.`,
+    moved: ({ area, mode, ago }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked ${minutes(ago)} min ago did not reach the gateway, and the area changed at the panel since (or could not be compared): not sent again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée il y a ${minutes(ago)} min n’a pas atteint la passerelle, et le secteur a changé à la centrale depuis (ou n’a pas pu être comparé) : pas renvoyée.`,
+    }),
+    overtaken: ({ area, mode, ago }) => ({
+      en: `The ${MODE_NAMES[mode].en} of area ${area} asked ${minutes(ago)} min ago may have been overtaken by an older unset of Gladys, and the area changed at the panel since (or could not be read): not sent again.`,
+      fr: `La mise en service ${MODE_NAMES[mode].fr} du secteur ${area} demandée il y a ${minutes(ago)} min a pu être dépassée par une mise hors service plus ancienne de Gladys, et le secteur a changé à la centrale depuis (ou n’a pas pu être lu) : pas renvoyée.`,
     }),
   },
   errors: {
@@ -319,6 +323,8 @@ export const T = {
     armNoAnswer: (err) =>
       `Sent, no valid answer from the gateway (${reasonOf(err).en}): area read again 5, 20 and 60 s later; sent again within 2 minutes only if nothing changed at the panel`,
     armReplaced: 'Not sent: an unset command of this area, asked after it, left first',
+    unconfirmedOverlap: (what) =>
+      `Sent and accepted by the gateway, not yet shown by the area (${what}); an older unset of Gladys was still in flight: sent once more only if it lands after this set and nothing changes at the panel`,
     unconfirmed: (what) =>
       `Sent and accepted by the gateway, not yet shown by the area (${what}): read again 5, 20 and 60 s later, not sent again`,
     disarmUnconfirmed:

@@ -91,7 +91,8 @@ the area is read back until 4.3 s:
 - the area shows the mode: done;
 - the gateway accepted it, but the area does not show it yet: Gladys answers
   "sent and accepted, not yet shown", and the area is read again 5, 20 and
-  60 s later. **It is not sent a second time**: the panel may be in its exit
+  60 s later. **It is not sent a second time** (one exception below: an
+  older unset of Gladys still in flight): the panel may be in its exit
   time, a zone may be open, or someone inside may have cancelled it at the
   keypad. If the area still does not show it after 60 s, the status of the
   integration says so;
@@ -102,13 +103,18 @@ the area is read back until 4.3 s:
   says so. It is sent again (3 times at most, within **2 minutes** of the
   press, also after a restart) only on a fresh read of the area that shows it
   exactly as it was read before the press (mode, last set time, last unset
-  time; that read less than 150 s before the press) and with no set or unset
-  event of the panel since the press. Otherwise it is dropped and the status
-  says to set again.
+  time; that read less than 150 s before the press, the fresh read started
+  after the press) and with no set or unset event of the panel since the
+  press. When the gateway gives neither time, the websocket must have been
+  open since the press. Otherwise it is dropped and the status says so.
 
-A set pressed while an unset of Gladys of the same area is already on the
-wire may be overtaken by it: once that unset is answered, the area is read
-again and the set is sent again once if the area does not show it.
+A set pressed while an unset of Gladys of the same area is on the wire and
+not answered yet may be overtaken by it. Once that unset is answered, the
+area as read right after it becomes the reference: the set is sent again
+once only if a later fresh read shows the area still exactly so (mode, last
+set and unset times) and no set or unset event of the panel came more than
+1 s after that answer. An unset answered before the set was pressed cannot
+overtake it: nothing is sent again then.
 
 A **part set** is not sent over a full set read at that moment (nothing is
 sent: the area stays fully set) and not over the other part set (refused:
@@ -174,10 +180,12 @@ status shows the serial number met. If it is yours (a panel replaced), press
 - The status of the integration tells whether the gateway answers, the
   number of areas and zones, whether the events arrive live (and the HTTP
   status of the websocket when it is refused), the use of Basic, and what
-  became of a set that is not shown.
+  became of a set that is not shown (for 1 hour at most, until the area is
+  set).
 - **Test the connection**: reads the configuration again, makes one try
   despite refused credentials (at most every 10 s), forgets that Digest
-  worked (Basic still needs its option), reads the gateway when the pace
+  worked only after a stop on a Basic request following it (Basic still
+  needs its option), reads the gateway when the pace
   allows it (not more than once a minute), then reports.
 - Failed reads are tried again every minute at first, then 2, 4 and 5
   minutes apart; the websocket 15 s to 5 min later. A websocket refused by

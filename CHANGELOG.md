@@ -23,8 +23,11 @@ the notes of the version's GitHub Release.
   credentials kept (one try per press); tried again every 250 ms within
   3.5 s while it does not reach the gateway, confirmed by a read of the area.
   A set the gateway accepted is not sent a second time (someone inside may
-  have cancelled it at the keypad); one that never reached it is sent again
-  only on a fresh read showing nothing moved at the panel, within 2 minutes.
+  have cancelled it at the keypad), except once when an older unset of
+  Gladys still in flight at the press overtook it and nothing moved at the
+  panel since its answer; one that never reached it is sent again only on a
+  fresh read (started after the press) showing nothing moved at the panel,
+  within 2 minutes.
   A part set is not sent over a full set read at that moment.
 - Unsetting is off by default (option), needs the serial number of the
   panel read in this session, is decided on a fresh read, at most 6 per area

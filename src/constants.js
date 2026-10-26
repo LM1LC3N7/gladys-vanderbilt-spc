@@ -181,6 +181,8 @@ export const TIMINGS = Object.freeze({
   followUps: [5_000, 20_000, 60_000],
   /** A set that never reached the gateway may be sent again this long after the press. */
   guardLife: 2 * 60_000,
+  /** A notice about a set in the status is dropped after this. */
+  noticeLife: 60 * 60_000,
   /** "Test the connection" answers within this (the manifest allows 30 s). */
   testBudget: 25_000,
   /** At most one read for the "Test the connection" button per this much. */

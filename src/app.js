@@ -377,18 +377,20 @@ export class SpcApp {
 
   /**
    * The user pressed "Test the connection": one try despite a stop on
-   * credentials; a Digest pin is forgotten (the user checked the gateway;
-   * Basic still needs its option).
+   * credentials; after a stop on a Basic request following Digest, the
+   * Digest memory is forgotten (the user checked the gateway; Basic still
+   * needs its option). Otherwise it is kept.
    */
   async lift() {
     const mono = this.monotonic();
     if (this.lastForcedAt !== undefined && mono - this.lastForcedAt < TIMINGS.testGap) return;
     this.lastForcedAt = mono;
+    const downgrade = this.authStop?.kind === 'downgrade';
     this.authStop = null;
     this.commandAuthRefused = false;
     this.nextTryAt = undefined;
     this.retryDelay = TIMINGS.retryMin;
-    if (this.memory?.authScheme) {
+    if (downgrade && this.memory?.authScheme) {
       this.memory.authScheme = null;
       if (this.client) {
         this.client.pinnedScheme = null;
@@ -523,7 +525,7 @@ export class SpcApp {
       return undefined;
     });
     if (gone()) return;
-    await this.succeeded({ areas, panel, zones, seq });
+    await this.succeeded({ areas, panel, zones, seq, startedAt: mono });
   }
 
   /** A read failed: a stop on credentials, or a retry with a growing delay. */
@@ -592,7 +594,7 @@ export class SpcApp {
     );
   }
 
-  async succeeded({ areas, panel, zones, seq }) {
+  async succeeded({ areas, panel, zones, seq, startedAt }) {
     this.retryDelay = TIMINGS.retryMin;
     this.nextTryAt = undefined;
     if (this.memory.refused) {
@@ -635,7 +637,7 @@ export class SpcApp {
     this.zonesUnread = !zones;
     this.readAt = this.monotonic();
     // This read left after every press: a fresh read for the guards.
-    this.checkGuards({ fresh: true, seq });
+    this.checkGuards({ fresh: true, seq, startedAt });
     await this.publishDiscovered();
     await this.publishStates();
     await this.publishTransports();
@@ -708,7 +710,7 @@ export class SpcApp {
         zoneKindsInvalid: this.config.zoneKindsInvalid,
         unwritable: this.saveWarned,
         basic: this.client?.learnedScheme === 'basic',
-        notices: [...this.notices.values()].slice(-3),
+        notices: this.currentNotices(),
       }),
     );
   }
@@ -833,6 +835,7 @@ export class SpcApp {
     }
     this.wsRetry = 0;
     this.eventsState = 'live';
+    this.eventsLiveSince = this.monotonic();
     this.eventsStatus = undefined;
     this.logger.info('Websocket open: live events');
     this.startPing(socket);
@@ -1093,10 +1096,25 @@ export class SpcApp {
     if (count > 0) this.logger.warn(`Unset WITHDRAWN (area ${area}): a set was asked after it`);
   }
 
-  setNotice(area, text) {
+  /** `notice`: { kind, mode } of T.notices, dated now; null clears it. */
+  setNotice(area, notice) {
     this.notices.delete(area);
-    if (text) this.notices.set(area, text);
+    if (notice) this.notices.set(area, { ...notice, area, at: this.monotonic() });
     void this.refreshStatus();
+  }
+
+  /** The notices still true: at most 1 h old, the area not set since. */
+  currentNotices() {
+    const mono = this.monotonic();
+    for (const [area, notice] of this.notices) {
+      const mode = this.model.areas.get(area)?.mode;
+      if (mono - notice.at >= TIMINGS.noticeLife || (mode && mode !== 'unset')) {
+        this.notices.delete(area);
+      }
+    }
+    return [...this.notices.values()]
+      .slice(-3)
+      .map((n) => T.notices[n.kind]({ area: n.area, mode: n.mode, ago: mono - n.at }));
   }
 
   /**
@@ -1195,16 +1213,16 @@ export class SpcApp {
     );
     if (confirmed) {
       // Kept while an unset of Gladys in flight may still land after it.
-      this.liftGuardIf(
-        area,
-        (g) => g === guard && !(g.overlap && this.disarmUncertain(area, this.monotonic())),
-        'confirmed',
-      );
+      this.liftGuardIf(area, (g) => g === guard && !this.overlapPending(g), 'confirmed');
       this.logger.info(`Set confirmed by the area read back (${label})`);
       return;
     }
     this.logger.warn(`Set accepted, NOT shown yet (${label}): read again 5, 20 and 60 s later`);
-    throw new Error(T.errors.unconfirmed(MODE_NAMES[mode].en));
+    throw new Error(
+      guard.overlap
+        ? T.errors.unconfirmedOverlap(MODE_NAMES[mode].en)
+        : T.errors.unconfirmed(MODE_NAMES[mode].en),
+    );
   }
 
   /** The mode of the area for a part set: read now, else the last known if it is "unset". */
@@ -1348,7 +1366,9 @@ export class SpcApp {
       resends: 0,
       delivered: false,
       ref: fresh ? SpcApp.stateOf(known) : null,
-      overlap: this.disarmUncertain(area, mono),
+      // An unset of Gladys of this area decided and not answered: it may land after this set.
+      overlap: (this.disarmsInFlight.get(area) ?? 0) > 0,
+      awaitRef: (this.disarmsInFlight.get(area) ?? 0) > 0,
       followIndex: 0,
       followTimer: undefined,
     };
@@ -1370,10 +1390,40 @@ export class SpcApp {
     this.guards.delete(guard.area);
     this.logger.info(`Guard of area ${guard.area} lifted: ${why}`);
     if (notice) {
-      this.logger.warn(notice.en);
-      this.setNotice(guard.area, notice);
+      this.logger.warn(T.notices[notice]({ area: guard.area, mode: guard.mode, ago: 0 }).en);
+      this.setNotice(guard.area, { kind: notice, mode: guard.mode });
     }
     void this.save();
+  }
+
+  /** A set marked overlap whose older unset is not answered, or its reference not read yet. */
+  overlapPending(guard) {
+    return (
+      guard.overlap && ((this.disarmsInFlight.get(guard.area) ?? 0) > 0 || guard.awaitRef === true)
+    );
+  }
+
+  /**
+   * The older unset of Gladys of this area was answered (and read back): the
+   * reference of an overlap set is the area read after that answer (none:
+   * never sent again); the events count from 1 s after it (its own come with it).
+   */
+  overlapReference(area, { left = true } = {}) {
+    const guard = this.guards.get(area);
+    if (!guard?.overlap || !guard.awaitRef) return;
+    if ((this.disarmsInFlight.get(area) ?? 0) > 0) return;
+    guard.awaitRef = false;
+    if (!left) {
+      // The unset never left: nothing can overtake this set.
+      guard.overlap = false;
+      return;
+    }
+    const settledAt = this.disarmSettledAt.get(area) ?? this.monotonic();
+    const read = this.model.areas.get(area);
+    guard.ref =
+      read && read.mode !== null && read.readMono >= settledAt ? SpcApp.stateOf(read) : null;
+    guard.eventsFrom = settledAt + 1_000;
+    this.scheduleFollow(guard, 0);
   }
 
   liftGuardIf(area, test, why) {
@@ -1428,12 +1478,14 @@ export class SpcApp {
 
   /**
    * Every guard against the areas the model holds. `fresh` with `seq`: the
-   * read numbered `seq` just replaced them (it left after every press).
+   * read numbered `seq`, started at `startedAt`, just replaced them.
    */
-  checkGuards({ fresh = false, seq } = {}) {
+  checkGuards({ fresh = false, seq, startedAt } = {}) {
     for (const guard of [...this.guards.values()]) {
       const area = this.model.areas.get(guard.area);
-      this.evaluateGuard(guard, area, { fresh: fresh && area?.seq === seq });
+      // Fresh only for a read that LEFT after the press.
+      const after = startedAt !== undefined && startedAt > guard.atMono;
+      this.evaluateGuard(guard, area, { fresh: fresh && after && area?.seq === seq });
     }
   }
 
@@ -1447,15 +1499,13 @@ export class SpcApp {
    */
   evaluateGuard(guard, area, { final = false, fresh = false } = {}) {
     const mono = this.monotonic();
-    const when = new Date(guard.at).toISOString().slice(11, 16);
-    const what = { area: guard.area, mode: guard.mode, when };
     if (mono - guard.atMono >= TIMINGS.guardLife) {
-      this.dropGuard(guard, 'expired', guard.delivered ? undefined : T.notices.neverLeft(what));
+      this.dropGuard(guard, 'expired', guard.delivered ? undefined : 'neverLeft');
       return;
     }
     if (!area || area.mode === null) return;
     // An unset of Gladys in flight may still land after this set: wait for it.
-    if (guard.overlap && this.disarmUncertain(guard.area, mono)) return;
+    if (this.overlapPending(guard)) return;
     if (shows(area, guard.mode)) {
       this.dropGuard(guard, `area shows ${area.mode}`);
       return;
@@ -1463,7 +1513,7 @@ export class SpcApp {
     if (guard.delivered && !guard.overlap) {
       // Accepted by the gateway: exit time, a zone open, or cancelled at the
       // keypad by someone inside. Never sent again.
-      if (final) this.dropGuard(guard, 'accepted, not shown', T.notices.notVisible(what));
+      if (final) this.dropGuard(guard, 'accepted, not shown', 'notVisible');
       return;
     }
     if (!fresh) return;
@@ -1471,36 +1521,44 @@ export class SpcApp {
     if (!this.client || this.authStop || this.commandAuthRefused || this.identity === 'other') {
       return;
     }
-    if (guard.overlap) {
-      // The older unset of Gladys settled: decided once on this read.
-      guard.overlap = false;
-      guard.ref = SpcApp.stateOf(area);
-      guard.eventsFrom = mono;
-    } else {
-      const ref = guard.ref;
-      const moved =
-        !ref ||
-        area.mode !== ref.mode ||
-        area.lastSetTime !== ref.lastSetTime ||
-        area.lastUnsetTime !== ref.lastUnsetTime ||
-        (this.areaEventAt.get(guard.area) ?? -Infinity) > guard.eventsFrom;
-      if (moved) {
-        this.dropGuard(
-          guard,
-          ref ? 'the area changed at the panel since the press' : 'no reference read',
-          T.notices.moved(what),
-        );
-        return;
-      }
+    // The reference: the area at the press (a set never delivered), or as
+    // read right after the older unset of Gladys was answered (overlap).
+    const ref = guard.ref;
+    const noTimes =
+      ref &&
+      ref.lastSetTime === null &&
+      ref.lastUnsetTime === null &&
+      area.lastSetTime === null &&
+      area.lastUnsetTime === null;
+    // Without any time, only the live events show a set then unset at the keypad.
+    const blind =
+      noTimes && !(this.eventsState === 'live' && this.eventsLiveSince <= guard.eventsFrom);
+    const moved =
+      !ref ||
+      blind ||
+      area.mode !== ref.mode ||
+      area.lastSetTime !== ref.lastSetTime ||
+      area.lastUnsetTime !== ref.lastUnsetTime ||
+      (this.areaEventAt.get(guard.area) ?? -Infinity) > guard.eventsFrom;
+    if (moved) {
+      this.dropGuard(
+        guard,
+        ref ? 'the area changed at the panel (or cannot be compared)' : 'no reference read',
+        guard.overlap ? 'overtaken' : 'moved',
+      );
+      return;
     }
     if (guard.resends >= LIMITS.armResends) {
-      this.dropGuard(guard, 'given up', T.notices.neverLeft(what));
+      this.dropGuard(guard, 'given up', 'neverLeft');
       return;
     }
     guard.resends += 1;
     this.logger.warn(
-      `Set of area ${guard.area} (${guard.mode}) never reached the gateway, nothing moved: sent again (${guard.resends}/${LIMITS.armResends})`,
+      guard.overlap
+        ? `Set of area ${guard.area} (${guard.mode}) overtaken by an older unset of Gladys, nothing moved since: sent again once`
+        : `Set of area ${guard.area} (${guard.mode}) never reached the gateway, nothing moved: sent again (${guard.resends}/${LIMITS.armResends})`,
     );
+    guard.overlap = false;
     const client = this.client;
     const generation = this.generation;
     client.cutFrozenReads(TIMINGS.frozenRead);
@@ -1621,6 +1679,7 @@ export class SpcApp {
       });
     } catch (err) {
       this.disarmSettled(area, ticket.sent);
+      this.overlapReference(area, { left: ticket.sent && !err?.notSent });
       if (!ticket.sent || err?.notSent) {
         if (ticket.withdrawn) throw new Refused(T.errors.disarmWithdrawn);
         throw new Refused(T.errors.disarmNotSent(err));
@@ -1640,6 +1699,7 @@ export class SpcApp {
       client,
       (a) => a.mode === 'unset',
     );
+    this.overlapReference(area);
     if (confirmed) {
       this.model.verified.delete(area);
       this.logger.info(`Unset confirmed by the area read back (${label})`);
@@ -1657,8 +1717,6 @@ export class SpcApp {
     else this.disarmsInFlight.delete(area);
     if (!sent) return;
     this.disarmSettledAt.set(area, this.monotonic());
-    const guard = this.guards.get(area);
-    if (guard?.overlap) this.scheduleFollow(guard, 0);
   }
 
   /** The area read again 5 and 20 s after an unset not confirmed (states only). */
