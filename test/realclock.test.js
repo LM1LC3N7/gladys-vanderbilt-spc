@@ -3,7 +3,7 @@
 // real HTTP transport and the real websocket (`ws`) against the fake gateway
 // on loopback, with Digest authentication: the reads really start, at 0, the
 // interval and twice the interval; an event reads its zone; a set goes out.
-// Time sped up 100 times (60 s are 600 ms), but the real clock: it moves
+// Time sped up 20 times (60 s are 3 s), but the real clock: it moves
 // between any two reads of it.
 // -----------------------------------------------------------------------------
 
@@ -18,7 +18,7 @@ import { createdDevices, device, feature } from './helpers/app.js';
 import { createFakeGateway } from './helpers/fakeGateway.js';
 import { listen } from './helpers/server.js';
 
-const SPEED = 100;
+const SPEED = 20;
 const INTERVAL = TIMINGS.poll;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

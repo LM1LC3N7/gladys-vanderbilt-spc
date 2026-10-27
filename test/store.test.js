@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -79,8 +79,9 @@ test('a refused password is kept as an 8-bit marker: never found back by brute f
   assert.equal(normalizeMemory({ refused: { salt: 'x', mark: 'zz' } }, NOW).refused, null);
 });
 
-test('the file: 0600, written whole; an unreadable file is not a first start', async () => {
+test('the file: 0600, written whole; an unreadable file is not a first start', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'spc-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
   const path = join(dir, 'state.json');
   const store = fileStore(path);
   assert.equal(await store.load(), null);

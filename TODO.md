@@ -22,7 +22,7 @@ up to date at the end of every milestone.
       with a persisted refusal; panel identity by serial number; "Test the
       connection" and "Use the panel that answers"; fr/en. Tested against an
       in-memory fake gateway, and on loopback (real HTTP and `ws` servers,
-      Digest, real clock sped up 100 times).
+      Digest, real clock sped up 20 times).
 - [x] **Review 1 fixes** (2026-10-26, review of 4c1086e: 2 blocking, 4
       important): see "Decisions after review 1".
 - [ ] **Milestone 2 - real gateway**: run against a real SPC Web Gateway and
@@ -93,8 +93,11 @@ up to date at the end of every milestone.
 - **Version 0.1.0, set by hand once** (package.json, package-lock.json, the
   manifest `version` and the `docker_image` tag); every later version comes
   from Actions -> Release (the first patch release gives 0.1.1).
-- **SDK `^0.15.0`**: 0.16.0 is tagged on GitHub but not published on npm
-  (`npm view` gives 0.15.0 on 2026-10-26); migrate when it is.
+- **SDK `^0.16.0`** (2026-10-27, migration wave 2): 0.16.0 is on npm since
+  2026-10-25 (a stale npm cache said otherwise); it adds the ai, tts and music
+  types; no effect here (`should_poll` explicit, `poll_frequency` unused).
+  `keywords`, `countries` and `gladys_version >= 5.3.0` wait until Gladys 5.3
+  is widespread.
 - **Manifest**: `gladys_version >=5.1.0`, category `security`; no `keywords`
   nor `countries` yet (they need 5.3.0). Planned keywords: vanderbilt, spc,
   siemens, lundix, alarm, alarme, intrusion; countries: SE, CH, DE, AT, NL,
