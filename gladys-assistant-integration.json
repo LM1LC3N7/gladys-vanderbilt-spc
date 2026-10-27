@@ -6,8 +6,8 @@
     "en": "Vanderbilt SPC alarm panel through the SPC Web Gateway: areas, set, zones, live events.",
     "fr": "Centrale d'alarme Vanderbilt SPC par la SPC Web Gateway : secteurs, mise en service, zones."
   },
-  "version": "0.1.1",
-  "docker_image": "ghcr.io/lm1lc3n7/gladys-vanderbilt-spc:0.1.1",
+  "version": "0.1.2",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-vanderbilt-spc:0.1.2",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-vanderbilt-spc/main/cover.png",
   "categories": ["security"],

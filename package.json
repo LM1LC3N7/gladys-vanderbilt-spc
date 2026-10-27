@@ -1,6 +1,6 @@
 {
   "name": "gladys-vanderbilt-spc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Gladys Assistant external integration for Vanderbilt SPC alarm panels through the Lundix SPC Web Gateway: areas (arm, opt-in disarm), zones, live events. Unofficial, not affiliated with Vanderbilt nor Lundix.",
   "type": "module",
